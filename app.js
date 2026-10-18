@@ -137,12 +137,12 @@ function emptyDB() {
   return {
     version: 1,
     meta: { updatedAt: 0, calendarEmails: ['martino.cicerani@gmail.com', ''], calendarAuto: true, mailbox: 'martinoselly@gmail.com', mailSenders: DEFAULT_SENDERS },
-    docs: {}, works: {}, tags: {}, mail: {}, homes: {},
+    docs: {}, works: {}, tags: {}, mail: {}, homes: {}, dupok: {},
   };
 }
 const MAIN_HOME = { id: 'h_main', name: 'Casa', address: '', order: 0, createdAt: 0, updatedAt: 0 };
 let DB = lsGet(LS.data, null) || emptyDB();
-for (const k of ['docs', 'works', 'tags', 'mail', 'homes']) if (!DB[k]) DB[k] = {};
+for (const k of ['docs', 'works', 'tags', 'mail', 'homes', 'dupok']) if (!DB[k]) DB[k] = {};
 /* la prima casa ha un id fisso: due dispositivi non ne creano due copie */
 function ensureHome() { if (!DB.homes.h_main) DB.homes.h_main = Object.assign({}, MAIN_HOME); }
 ensureHome();
@@ -176,6 +176,7 @@ const PALETTE = ['#2F4BD8', '#0F7B6C', '#9A3A06', '#7A3FD1', '#B0306A', '#1F6F9E
 const docYear = (d) => (d.docDate || new Date(d.createdAt || now()).toISOString()).slice(0, 4);
 
 function persist(opts = {}) {
+  dupCache = null;
   lsSet(LS.data, DB);
   lsSet(LS.dirty, true);
   Sync.schedule();
@@ -228,7 +229,7 @@ function createTag(name) {
 }
 
 /* ---------------- merge: per elemento vince l'ultima modifica */
-const MAPS = ['docs', 'works', 'tags', 'mail', 'homes'];
+const MAPS = ['docs', 'works', 'tags', 'mail', 'homes', 'dupok'];
 function mergeMaps(a, b) {
   const out = Object.assign({}, a);
   for (const [k, v] of Object.entries(b || {})) {
@@ -319,12 +320,77 @@ async function compressImage(file, maxSide = 1800, quality = 0.72) {
     return { blob, w: c.width, h: c.height };
   } finally { URL.revokeObjectURL(url); }
 }
+async function fileHash(blob) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    return [...new Uint8Array(buf)].slice(0, 16).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) { return null; }
+}
+
+/* ================================================================ doppioni */
+let dupCache = null;
+const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+const dayDiff = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 86400000);
+const STOP = new Set(['bolletta', 'fattura', 'documento', 'della', 'rata', 'pagamento']);
+const words = (t) => new Set(String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP.has(w)));
+const shareWord = (a, b) => { const wa = words(a); for (const w of words(b)) if (wa.has(w)) return true; return false; };
+/* perché due documenti sembrano lo stesso; null se non lo sembrano */
+function dupReason(a, b) {
+  if (a.id === b.id) return null;
+  const ha = new Set((a.pages || []).map((p) => p.hash).filter(Boolean));
+  if (ha.size && (b.pages || []).some((p) => p.hash && ha.has(p.hash))) return 'contiene lo stesso file';
+  if (a.section !== b.section) return null;
+  if (a.section !== 'multe' && (a.category !== b.category || docHomeId(a) !== docHomeId(b))) return null;
+  if (a.sub && b.sub && a.sub !== b.sub) return null;
+  const sameAmount = a.amount != null && b.amount != null && Math.abs(a.amount - b.amount) < 0.005;
+  const sameDue = !!(a.dueDate && b.dueDate && a.dueDate === b.dueDate);
+  const nearDate = !!(a.docDate && b.docDate && dayDiff(a.docDate, b.docDate) <= 5);
+  if (sameAmount && (sameDue || nearDate)) return `stesso importo (${fmtEuro(a.amount)}) e ${sameDue ? 'stessa scadenza' : 'data vicina'}`;
+  const oneMissing = a.amount == null || b.amount == null;
+  if ((sameAmount || oneMissing) && (nearDate || sameDue) && (shareWord(a.title, b.title) || (a.source === 'mail') !== (b.source === 'mail')))
+    return 'stessa categoria' + (a.sub && a.sub === b.sub ? ' (' + a.sub + ')' : '') + ' e ' + (sameDue ? 'stessa scadenza' : 'data vicina') + (sameAmount ? ', stesso importo' : '');
+  return null;
+}
+function computeDups() {
+  if (dupCache) return dupCache;
+  const map = new Map();
+  const add = (a, b, why) => {
+    const ok = DB.dupok[pairKey(a.id, b.id)];
+    if (ok && !ok.deleted) return;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!map.has(x.id)) map.set(x.id, []);
+      if (!map.get(x.id).some((e) => e.id === y.id)) map.get(x.id).push({ id: y.id, why });
+    }
+  };
+  const buckets = new Map();
+  const push = (k, d) => { if (!buckets.has(k)) buckets.set(k, []); if (!buckets.get(k).includes(d)) buckets.get(k).push(d); };
+  for (const d of docs()) {
+    for (const p of d.pages || []) if (p.hash) push('h:' + p.hash, d);
+    const base = d.section === 'multe' ? 'multe' : d.category + '|' + docHomeId(d);
+    if (d.amount != null) push('a:' + base + '|' + Number(d.amount).toFixed(2), d);
+    if (d.docDate) push('d:' + base + '|' + d.docDate, d);
+  }
+  for (const arr of buckets.values()) {
+    if (arr.length < 2 || arr.length > 80) continue;
+    for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+      const why = dupReason(arr[i], arr[j]);
+      if (why) add(arr[i], arr[j], why);
+    }
+  }
+  dupCache = map;
+  return map;
+}
+const dupsOf = (d) => (computeDups().get(d.id) || []).filter((e) => DB.docs[e.id] && !DB.docs[e.id].deleted);
+function markNotDup(a, b) { DB.dupok[pairKey(a, b)] = { id: pairKey(a, b), updatedAt: now() }; persist(); toast('Ok, non li segnalo più'); }
+function dupCandidates(fake) { return docs().map((d) => ({ d, why: dupReason(fake, d) })).filter((x) => x.why).slice(0, 3); }
+
 async function filesToPages(fileList) {
   const out = [];
   for (const f of fileList) {
-    if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) out.push({ blob: f, type: 'pdf', name: f.name });
+    const hash = await fileHash(f);
+    if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) out.push({ blob: f, type: 'pdf', name: f.name, hash });
     else if (f.type.startsWith('image/') || /\.(jpe?g|png|heic|webp)$/i.test(f.name)) {
-      try { const c = await compressImage(f); out.push({ blob: c.blob, type: 'jpg', name: f.name, w: c.w, h: c.h }); }
+      try { const c = await compressImage(f); out.push({ blob: c.blob, type: 'jpg', name: f.name, w: c.w, h: c.h, hash }); }
       catch (e) { alert('Non riesco a leggere ' + f.name + ': ' + e.message); }
     }
   }
@@ -337,7 +403,7 @@ async function storePages(doc, pages, startIndex) {
     i++;
     const path = `files/${year}/${doc.category}/${doc.id}-${i}-${now().toString(36)}.${p.type}`;
     await IDB.put(path, p.blob);
-    stored.push({ path, type: p.type, name: p.name || '', size: p.blob.size });
+    stored.push({ path, type: p.type, name: p.name || '', size: p.blob.size, hash: p.hash || null });
   }
   await refreshPending();
   return stored;
@@ -418,7 +484,7 @@ const Sync = {
       for (let attempt = 0; attempt < 4 && !ok; attempt++) {
         const remote = await this.readJson('data.json');
         const merged = remote.data ? mergeDB(DB, remote.data) : DB;
-        DB = merged; ensureHome(); lsSet(LS.data, DB);
+        DB = merged; ensureHome(); dupCache = null; lsSet(LS.data, DB);
         if (remote.data && !differs(merged, remote.data)) { lsSet(LS.sha, remote.sha); ok = true; break; }
         const res = await this.push(merged, remote.sha);
         if (res.conflict) continue;
@@ -526,7 +592,7 @@ function render(routeChanged) {
   const views = {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
-    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes,
+    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups,
   };
   const fn = views[route.name] || viewPayments;
   const out = fn(route);
@@ -542,7 +608,7 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['impostazioni', 'calendario', 'mail', 'tag', 'case'].includes(route.name)) tab = 'altro';
+  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
   const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
@@ -582,6 +648,7 @@ function docRow(d, opts = {}) {
   const w = work(d.workId);
   const meta = h('div', { class: 'meta' },
     d.unseen ? h('span', { class: 'badge new' }, 'Nuovo') : null,
+    dupsOf(d).length ? h('span', { class: 'badge dup', title: 'Possibile doppione' }, 'Doppione?') : null,
     d.status === 'addebitata' ? h('span', { class: 'badge debit' }, 'Addebito') : null,
     d.status === 'da_pagare' ? h('span', { class: 'badge due' }, 'Da pagare') : null,
     d.amount != null ? h('span', { class: 'm amt' }, fmtEuro(d.amount)) : null,
@@ -794,6 +861,7 @@ function viewMore() {
       card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
       card('cat/lavori', 'hammer', 'Lavori e ristrutturazioni', `${works().length} lavori`),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
+      dupCount() ? card('doppioni', 'file', `Possibili doppioni (${dupCount()})`, 'Controlla e decidi cosa tenere') : null,
       card('impostazioni', 'sync', 'Sincronizzazione e backup', Sync.enabled() ? 'Collegata a GitHub' : 'Non configurata'),
     ), h('p', { class: 'footer-meta' }, `${docs().length} documenti · ${docs().reduce((s, d) => s + (d.pages || []).length, 0)} file`)],
     fab: fab('Nuovo documento', () => go('nuovo')),
@@ -952,6 +1020,35 @@ function viewMail() {
           h('li', null, 'Torna all\'editor, scegli la funzione ', h('code', null, 'setup'), ' e premi Esegui. Google chiede le autorizzazioni (Gmail, Calendar, connessioni esterne): accetta. Se dice "app non verificata": Avanzate → Vai al progetto.'),
           h('li', null, 'Fatto: controlla la casella ogni 15 minuti. Qui sopra vedrai l\'ora dell\'ultimo controllo.')))),
     ],
+  };
+}
+
+/* ---------------- Doppioni */
+function dupPairs() {
+  const seen = new Set(), out = [];
+  for (const [id, arr] of computeDups()) for (const e of arr) {
+    const k = pairKey(id, e.id);
+    if (seen.has(k) || !DB.docs[id] || DB.docs[id].deleted || !DB.docs[e.id] || DB.docs[e.id].deleted) continue;
+    seen.add(k); out.push([DB.docs[id], DB.docs[e.id], e.why]);
+  }
+  return out;
+}
+const dupCount = () => dupPairs().length;
+function viewDups() {
+  const pairs = dupPairs();
+  const line = (x) => `${catLabel(x)}${x.amount != null ? ' · ' + fmtEuro(x.amount) : ''}${x.docDate ? ' · ' + fmtDate(x.docDate, true) : ''} · ${(x.pages || []).length} file${STATUS[x.status] && STATUS[x.status].short ? ' · ' + STATUS[x.status].label : ''}`;
+  return {
+    top: topBar('Possibili doppioni', { back: 'altro', small: true }),
+    body: [h('div', { class: 'detail' },
+      h('p', { class: 'help', style: 'margin:0' }, 'Documenti che sembrano lo stesso: stesso file, oppure stessa categoria con stesso importo e date vicine. Elimina quello in più, oppure segnali come diversi e non te li ripropongo.'),
+      pairs.length ? pairs.map(([a, b, why]) => h('div', { class: 'panel dup-panel' },
+        h('p', { class: 'small', style: 'margin:0 0 10px' }, h('b', null, 'Motivo: '), why),
+        [a, b].map((x) => h('div', { class: 'dup-item' },
+          h('button', { class: 'card-link', onclick: () => go('doc/' + x.id) },
+            h('span', { class: 't' }, h('b', null, x.title), h('span', null, line(x))),
+            h('span', { class: 'chev' }, icon('chev'))),
+          h('button', { class: 'btn ghost danger', onclick: () => { deleteDoc(x.id); render(); } }, icon('trash'), 'Elimina questo'))),
+        h('button', { class: 'btn', onclick: () => markNotDup(a.id, b.id) }, 'Non sono doppioni'))) : h('div', { class: 'empty' }, 'Nessun doppione sospetto.'))],
   };
 }
 
@@ -1181,6 +1278,10 @@ function viewNew(route) {
   const save = async (btn) => {
     if (!D.title.trim()) { alert('Dai un titolo al documento (es. "Engie ottobre", "Condominio rata 3").'); $('.title-input').focus(); return; }
     if (Object.keys(D.suggested).length && !confirm('Importo e date sono stati proposti dalla lettura automatica. Li hai controllati?')) return;
+    const fake = { id: '_new', section: D.section, category: isMulte ? 'multe' : D.category, sub: isMulte ? '' : D.sub, homeId: isMulte ? null : D.homeId,
+      amount: parseEuro(D.amount), dueDate: D.dueDate || null, docDate: D.docDate || null, title: D.title, source: 'manual', pages: D.pages.map((p) => ({ hash: p.hash })) };
+    const dd = dupCandidates(fake);
+    if (dd.length && !confirm('Attenzione, possibile doppione:\n' + dd.map((x) => `• ${x.d.title} (${x.why})`).join('\n') + '\n\nSalvo comunque?')) return;
     btn.disabled = true; btn.textContent = 'Salvo…';
     try {
       const d = newDoc({
@@ -1203,6 +1304,9 @@ function viewNew(route) {
   const attachTargets = D.fromShare && D.pages.length
     ? docs().filter((d) => d.status !== 'pagato' || d.unseen).filter((d) => !(d.pages || []).length).sort((a, b) => (b.unseen - a.unseen) || (b.createdAt - a.createdAt)).slice(0, 5) : [];
   const attachTo = async (d) => {
+    const hs = new Set(D.pages.map((p) => p.hash).filter(Boolean));
+    const owner = docs().find((x) => (x.pages || []).some((p) => p.hash && hs.has(p.hash)));
+    if (owner && !confirm(`Questo file è già allegato a "${owner.title}". Allego comunque?`)) return;
     const patch = {};
     const amt = parseEuro(D.amount);
     if (amt != null && d.amount == null) patch.amount = amt;
@@ -1443,6 +1547,15 @@ function viewDoc(route) {
           i > 0 ? h('button', { class: 'icon-btn plain', 'aria-label': 'Sposta prima', onclick: () => { const a = [...d.pages]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; set({ pages: a }, true); } }, icon('left')) : null,
           h('button', { class: 'icon-btn plain', 'aria-label': 'Togli pagina', onclick: () => removePage(i) }, icon('trash')))))) : null,
       (d.pages || []).length ? h('button', { class: 'btn ghost', style: 'margin-top:6px', onclick: (e) => ocrExisting(e.currentTarget) }, icon('scan'), 'Leggi importo e date dai file') : null),
+    dupsOf(d).length ? h('div', { class: 'panel dup-panel' },
+      h('h2', null, 'Possibile doppione'),
+      dupsOf(d).map((e) => { const o = DB.docs[e.id]; return h('div', { class: 'dup-item' },
+        h('button', { class: 'card-link', onclick: () => go('doc/' + o.id) },
+          h('span', { class: 't' }, h('b', null, o.title), h('span', null, `${e.why} · ${catLabel(o)}${o.amount != null ? ' · ' + fmtEuro(o.amount) : ''}`)),
+          h('span', { class: 'chev' }, icon('chev'))),
+        h('div', { class: 'inline' },
+          h('button', { class: 'btn', onclick: () => markNotDup(d.id, o.id) }, 'Non è un doppione'),
+          h('button', { class: 'btn danger', onclick: () => { deleteDoc(id); goBack('pagamenti'); } }, icon('trash'), 'Elimina questo'))); })) : null,
     mailPanel,
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], d.section, (k) => set({ section: k, category: k === 'multe' ? 'multe' : (d.category === 'multe' ? 'altro' : d.category) }, true)),

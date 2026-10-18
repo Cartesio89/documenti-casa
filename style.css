@@ -382,3 +382,10 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .panel.attach { border-color: var(--accent); }
 .panel.attach .card-link { border-color: var(--line-strong); }
 .home-card .field + .field { margin-top: 10px; }
+.badge.dup { background: #FFE2C2; color: #8A3B00; }
+@media (prefers-color-scheme: dark) { .badge.dup { background: #4A2A10; color: #FFC38A; } }
+.panel.dup-panel { border-color: #E08A2E; }
+.panel.dup-panel h2 { color: #B25D00; }
+.dup-item { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.dup-item .btn.ghost { align-self: flex-start; }
+.dup-item .card-link .t span, .panel.attach .card-link .t span { white-space: normal; }

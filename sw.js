@@ -1,6 +1,6 @@
 /* Service worker di Documenti casa: app utilizzabile offline + ricezione file condivisi (Android). */
 'use strict';
-const VERSION = 'dc-2026-10-18-2';
+const VERSION = 'dc-2026-10-18-3';
 const SHELL = ['./', 'index.html', 'app.js', 'parse.js', 'style.css', 'manifest.webmanifest',
   'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png',
   'vendor/jspdf.umd.min.js', 'vendor/jszip.min.js', 'vendor/pdf/pdf.min.js', 'vendor/pdf/pdf.worker.min.js'];

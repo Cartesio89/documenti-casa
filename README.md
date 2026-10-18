@@ -20,6 +20,12 @@ L'app funziona anche offline. Documenti e foto inseriti senza rete restano sul t
 - PDF: l'app ne legge il testo e propone da sola importo e scadenza.
 - Foto: OCR in italiano nel telefono, su richiesta. Motore e dizionario sono in `vendor/ocr` (circa 6 MB, caricati solo al primo uso). Tutti i valori proposti vanno confermati a mano.
 - **Condividi → Documenti** (Android, con l'app installata): un PDF o una foto condivisi da un'altra app aprono un documento nuovo, oppure si allegano a una bolletta già arrivata per mail.
+- **Doppioni**: l'app avvisa al salvataggio se il documento sembra già presente. Criteri:
+  - stesso file;
+  - stessa categoria, stesso importo e scadenza o data vicina;
+  - stessa categoria e data vicina tra una bolletta arrivata dalla mail e una inserita a mano.
+
+  I sospetti restano segnati con "Doppione?" e sono raccolti in Altro → Possibili doppioni, dove si elimina quello in più o si segnano come diversi.
 - **Abitazioni**: con una sola casa non viene chiesto nulla. Dalla seconda in poi si sceglie la casa per ogni documento (le multe escluse), con filtro in Pagamenti e Archivio.
 - Stati del documento:
   - Da pagare
