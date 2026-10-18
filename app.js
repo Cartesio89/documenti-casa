@@ -1211,7 +1211,7 @@ function freshDraft(q) {
     homeId: w ? workHomeId(w) : defaultHomeId(),
     status: section === 'multe' || cat === 'utenze' || cat === 'condominio' ? 'da_pagare' : 'none',
     amount: '', docDate: todayISO(), dueDate: '', tags: [], notes: '', suggested: {}, ocrState: '',
-    fromShare: q.get('shared') === '1', shareLoaded: false,
+    fromShare: q.get('shared') === '1', shareLoaded: false, mode: q.get('shared') === '1' ? 'file' : 'manual',
   };
 }
 function applySuggestions(D, text) {
@@ -1321,9 +1321,15 @@ function viewNew(route) {
     location.replace('#/doc/' + d.id);
     toast('File allegato');
   };
-  const filesPanel = h('div', { class: 'panel' },
-    h('h2', null, 'Foto e file', h('span', { class: 'prog' }, D.pages.length ? `${D.pages.length}` : 'facoltativi')),
-    D.pages.length ? pagesGrid : h('p', { class: 'help', style: 'margin:0 0 10px' }, 'Fotografa il documento una pagina alla volta, oppure carica foto o PDF. Dai PDF l\'app propone da sola importo e scadenza.'),
+  /* tre modalità sotto il titolo: Manuale (predefinita), Scatta foto, Carica file */
+  const setMode = (m) => { D.mode = m; if (m === 'foto') pickFiles(true, false, addFiles); else if (m === 'file') pickFiles(false, true, addFiles); redraw(); };
+  const modeBar = h('div', { class: 'segmented mode-bar', role: 'group', 'aria-label': 'Come inserire il documento' },
+    [['manual', 'pen', 'Manuale'], ['foto', 'camera', 'Scatta foto'], ['file', 'upload', 'Carica file']].map(([k, ic, label]) =>
+      h('button', { 'aria-pressed': String(D.mode === k), onclick: () => setMode(k) }, icon(ic), label)));
+  const showFiles = D.mode !== 'manual' || D.pages.length > 0;
+  const filesPanel = !showFiles ? null : h('div', { class: 'panel' },
+    h('h2', null, D.mode === 'foto' ? 'Foto del documento' : 'File', h('span', { class: 'prog' }, D.pages.length ? `${D.pages.length}` : '')),
+    D.pages.length ? pagesGrid : h('p', { class: 'help', style: 'margin:0 0 10px' }, D.mode === 'foto' ? 'Fotografa il documento una pagina alla volta.' : 'Scegli foto o PDF già salvati. Dai PDF l\'app propone da sola importo e scadenza.'),
     h('div', { class: 'inline' },
       h('button', { class: 'btn', onclick: () => pickFiles(true, false, addFiles) }, icon('camera'), D.pages.length ? 'Aggiungi pagina' : 'Scatta foto'),
       h('button', { class: 'btn', onclick: () => pickFiles(false, true, addFiles) }, icon('upload'), 'Carica file')),
@@ -1339,6 +1345,8 @@ function viewNew(route) {
         h('span', { class: 'chev' }, icon('chev'))))),
       h('p', { class: 'help', style: 'margin:10px 0 0' }, 'Oppure compila qui sotto per creare un documento nuovo.')) : null,
     h('textarea', { class: 'title-input', rows: 1, placeholder: isMulte ? 'Titolo (es. Multa ZTL via Nazionale)' : 'Titolo (es. Engie ottobre)', value: D.title, oninput: (e) => { D.title = e.target.value; } }),
+    modeBar,
+    filesPanel,
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], D.section, (k) => { D.section = k; if (k === 'multe') { D.status = 'da_pagare'; } else if (D.category === 'multe') D.category = 'utenze'; redraw(); }),
       !isMulte && multiHome() ? h('div', { class: 'field' }, h('label', null, 'Abitazione'), homeSelect(D.homeId, (v) => { D.homeId = v; if (D.workId && work(D.workId) && workHomeId(work(D.workId)) !== v) D.workId = null; redraw(); })) : null,
@@ -1356,7 +1364,6 @@ function viewNew(route) {
       h('div', { class: 'field' }, h('label', null, 'Tag'), tagPicker(D.tags, (v) => { D.tags = v; })),
       h('div', { class: 'field' }, h('label', { for: 'n-notes' }, 'Note'),
         h('textarea', { class: 'input', id: 'n-notes', placeholder: isMulte ? 'Targa, luogo, numero verbale, termine per lo sconto…' : 'Note libere: numero contratto, ditta, cosa comprende…', value: D.notes, oninput: (e) => { D.notes = e.target.value; } }))),
-    filesPanel,
     h('button', { class: 'btn primary block', onclick: (e) => save(e.currentTarget) }, icon('check'), 'Salva'),
   )];
   return { top: topBar(isMulte ? 'Nuova multa' : 'Nuovo documento', { back: isMulte ? 'multe' : 'pagamenti', small: true }), body };

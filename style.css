@@ -389,3 +389,7 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .dup-item { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .dup-item .btn.ghost { align-self: flex-start; }
 .dup-item .card-link .t span, .panel.attach .card-link .t span { white-space: normal; }
+.mode-bar { margin: 0; }
+.mode-bar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13.5px; }
+.mode-bar svg { width: 16px; height: 16px; flex: none; }
+@media (max-width: 360px) { .mode-bar button { flex-direction: column; gap: 2px; font-size: 12px; min-height: 52px; } }
