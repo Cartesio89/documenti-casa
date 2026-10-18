@@ -2,7 +2,11 @@
 
 App personale per i documenti di casa: bollette, condominio, assicurazioni, mutuo, lavori e ristrutturazioni, elettrodomestici e mobili (scontrini, pagamenti, garanzie), contratti e multe.
 
-Online su **https://cartesio89.github.io/documenti-casa/**. Dal telefono: "Aggiungi a schermata Home".
+Online su **https://cartesio89.github.io/documenti-casa/**. Si installa come app (icona casa con chiave inglese, senza barra del browser):
+- Android/Chrome: menu ⋮ → *Installa app*;
+- iPhone/Safari: Condividi → *Aggiungi alla schermata Home*.
+
+L'app funziona anche offline. Documenti e foto inseriti senza rete restano sul telefono e si sincronizzano appena torna la connessione.
 
 ## Dove stanno i dati
 - Questo repo (pubblico) contiene solo il codice. Nessun dato personale.
@@ -11,8 +15,12 @@ Online su **https://cartesio89.github.io/documenti-casa/**. Dal telefono: "Aggiu
 - Foto scattate offline: restano sul dispositivo (IndexedDB) e si caricano appena c'è rete.
 
 ## Funzioni
+- Pulsante **+** in ogni sezione: inserimento manuale (campi e note), con foto e file facoltativi.
 - Foto multipagina dalla fotocamera, oppure upload di foto e PDF. Le immagini vengono compresse prima del caricamento.
-- Lettura automatica di importo e date (OCR in italiano, nel browser). I valori sono solo proposte da confermare a mano. La prima volta il telefono scarica circa 6 MB, che poi restano nella cache del browser.
+- PDF: l'app ne legge il testo e propone da sola importo e scadenza.
+- Foto: OCR in italiano nel telefono, su richiesta. Motore e dizionario sono in `vendor/ocr` (circa 6 MB, caricati solo al primo uso). Tutti i valori proposti vanno confermati a mano.
+- **Condividi → Documenti** (Android, con l'app installata): un PDF o una foto condivisi da un'altra app aprono un documento nuovo, oppure si allegano a una bolletta già arrivata per mail.
+- **Abitazioni**: con una sola casa non viene chiesto nulla. Dalla seconda in poi si sceglie la casa per ogni documento (le multe escluse), con filtro in Pagamenti e Archivio.
 - Stati del documento:
   - Da pagare
   - Addebito (domiciliata)
@@ -27,4 +35,7 @@ Online su **https://cartesio89.github.io/documenti-casa/**. Dal telefono: "Aggiu
 
 ## Limiti noti
 - Calendario: niente sincronizzazione a due vie. Gli eventi creati dall'app vanno salvati a mano.
-- Engie: la mail non contiene né importo né PDF, solo il link alla Digital Bill, che chiede il codice fiscale. L'app apre il link e copia il codice fiscale, se è salvato sul dispositivo. Il PDF va poi aggiunto a mano.
+- Engie: la mail contiene solo il link alla Digital Bill, protetta dal codice fiscale. Il flusso è:
+  1. apri il link dall'app (il codice fiscale viene copiato negli appunti);
+  2. scarica il PDF;
+  3. Condividi → Documenti: importo e scadenza vengono proposti e tu li confermi.

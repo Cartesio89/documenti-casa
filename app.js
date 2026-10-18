@@ -69,6 +69,7 @@ const ICONS = {
   scan: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
+  home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/>',
 };
 function icon(name, strokeWidth) {
@@ -136,11 +137,36 @@ function emptyDB() {
   return {
     version: 1,
     meta: { updatedAt: 0, calendarEmails: ['martino.cicerani@gmail.com', ''], calendarAuto: true, mailbox: 'martinoselly@gmail.com', mailSenders: DEFAULT_SENDERS },
-    docs: {}, works: {}, tags: {}, mail: {},
+    docs: {}, works: {}, tags: {}, mail: {}, homes: {},
   };
 }
+const MAIN_HOME = { id: 'h_main', name: 'Casa', address: '', order: 0, createdAt: 0, updatedAt: 0 };
 let DB = lsGet(LS.data, null) || emptyDB();
-for (const k of ['docs', 'works', 'tags', 'mail']) if (!DB[k]) DB[k] = {};
+for (const k of ['docs', 'works', 'tags', 'mail', 'homes']) if (!DB[k]) DB[k] = {};
+/* la prima casa ha un id fisso: due dispositivi non ne creano due copie */
+function ensureHome() { if (!DB.homes.h_main) DB.homes.h_main = Object.assign({}, MAIN_HOME); }
+ensureHome();
+const homes = () => Object.values(DB.homes).filter((x) => !x.deleted).sort((a, b) => (a.order || 0) - (b.order || 0));
+const multiHome = () => homes().length > 1;
+const homeById = (id) => (id && DB.homes[id] && !DB.homes[id].deleted ? DB.homes[id] : null);
+const docHomeId = (d) => (homeById(d.homeId) ? d.homeId : homes()[0].id);
+const docHome = (d) => homeById(docHomeId(d));
+function inHomeFilter(d) {
+  if (!multiHome() || !UI.home || UI.home === 'all' || !homeById(UI.home)) return true;
+  if (d.section === 'multe') return false;
+  return docHomeId(d) === UI.home;
+}
+function defaultHomeId() { return homeById(UI.home) ? UI.home : (homeById(lsGet('dc.lastHome', '')) ? lsGet('dc.lastHome', '') : homes()[0].id); }
+function homeChips() {
+  if (!multiHome()) return null;
+  const cur = homeById(UI.home) ? UI.home : 'all';
+  return h('div', { class: 'chips' }, [['all', 'Tutte le case'], ...homes().map((x) => [x.id, x.name])].map(([k, l]) =>
+    h('button', { class: 'chip', 'aria-pressed': String(cur === k), onclick: () => setUI({ home: k }) }, k === 'all' ? null : icon('home'), l)));
+}
+function homeSelect(value, onChange) {
+  return h('select', { class: 'input', 'aria-label': 'Abitazione', onchange: (e) => onChange(e.target.value) },
+    homes().map((x) => h('option', { value: x.id, selected: x.id === value }, x.name)));
+}
 const docs = () => Object.values(DB.docs).filter((d) => !d.deleted);
 const works = () => Object.values(DB.works).filter((w) => !w.deleted).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 const work = (id) => (id && DB.works[id] && !DB.works[id].deleted ? DB.works[id] : null);
@@ -188,8 +214,8 @@ function togglePaid(id) {
     toast('Rimesso tra i da pagare', 'Annulla', () => updateDoc(id, { status: 'pagato', paidAt: todayISO() }));
   }
 }
-function createWork(name) {
-  const w = { id: uid('w'), name, notes: '', createdAt: now(), updatedAt: now() };
+function createWork(name, homeId) {
+  const w = { id: uid('w'), name, notes: '', homeId: homeId || null, createdAt: now(), updatedAt: now() };
   DB.works[w.id] = w; persist({ render: false });
   return w;
 }
@@ -202,7 +228,7 @@ function createTag(name) {
 }
 
 /* ---------------- merge: per elemento vince l'ultima modifica */
-const MAPS = ['docs', 'works', 'tags', 'mail'];
+const MAPS = ['docs', 'works', 'tags', 'mail', 'homes'];
 function mergeMaps(a, b) {
   const out = Object.assign({}, a);
   for (const [k, v] of Object.entries(b || {})) {
@@ -213,7 +239,7 @@ function mergeMaps(a, b) {
 }
 function mergeDB(local, remote) {
   const out = { version: 1, meta: (remote.meta && (remote.meta.updatedAt || 0) > ((local.meta && local.meta.updatedAt) || 0)) ? remote.meta : (local.meta || remote.meta) };
-  for (const k of MAPS) out[k] = mergeMaps(local[k], remote[k]);
+  for (const k of MAPS) out[k] = mergeMaps(local[k] || {}, remote[k] || {});
   return out;
 }
 function differs(merged, remote) {
@@ -231,16 +257,16 @@ const IDB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
-      const r = indexedDB.open('documenti-casa', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('pending');
+      const r = indexedDB.open('documenti-casa', 2);
+      r.onupgradeneeded = () => { for (const st of ['pending', 'cache', 'shared']) if (!r.result.objectStoreNames.contains(st)) r.result.createObjectStore(st); };
       r.onsuccess = () => { this.db = r.result; res(this.db); };
       r.onerror = () => rej(r.error);
     });
   },
-  async tx(mode, fn) {
+  async tx(mode, fn, store = 'pending') {
     const db = await this.open();
     return new Promise((res, rej) => {
-      const t = db.transaction('pending', mode); const st = t.objectStore('pending');
+      const t = db.transaction(store, mode); const st = t.objectStore(store);
       const req = fn(st);
       t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error);
     });
@@ -249,15 +275,23 @@ const IDB = {
   get(path) { return this.tx('readonly', (s) => s.get(path)); },
   del(path) { return this.tx('readwrite', (s) => s.delete(path)); },
   keys() { return this.tx('readonly', (s) => s.getAllKeys()); },
+  cachePut(path, blob) { return this.tx('readwrite', (s) => s.put(blob, path), 'cache'); },
+  cacheGet(path) { return this.tx('readonly', (s) => s.get(path), 'cache'); },
+  sharedTake() { return this.tx('readonly', (s) => s.get('last'), 'shared').then((v) => this.tx('readwrite', (s) => s.delete('last'), 'shared').then(() => v)); },
 };
 const fileCache = new Map(); // path -> objectURL
 async function fileBlob(path) {
   const local = await IDB.get(path).catch(() => null);
   if (local) return local;
+  const cached = await IDB.cacheGet(path).catch(() => null);
+  if (cached) return cached;
   if (!Sync.enabled()) throw new Error('Sincronizzazione non configurata');
+  if (!navigator.onLine) throw new Error('Sei offline e questo file non è ancora salvato sul telefono');
   const r = await Sync.api('contents/' + encPath(path) + '?ref=' + encodeURIComponent(Sync.cfg().branch || 'main'), { headers: { Accept: 'application/vnd.github.raw' } });
   if (!r.ok) throw new Error('File non trovato (' + r.status + ')');
-  return r.blob();
+  const blob = await r.blob();
+  IDB.cachePut(path, blob).catch(() => {}); // da ora visibile anche offline
+  return blob;
 }
 async function fileUrl(path) {
   if (fileCache.has(path)) return fileCache.get(path);
@@ -366,6 +400,7 @@ const Sync = {
       // 422 senza sha = il file esiste già (caricato da un altro tentativo): va bene
       if (r.ok || r.status === 422) {
         if (!fileCache.has(path)) fileCache.set(path, URL.createObjectURL(blob));
+        await IDB.cachePut(path, blob).catch(() => {});
         await IDB.del(path);
       } else if (r.status === 401 || r.status === 403) throw new Error('Token senza permesso di scrittura (' + r.status + ')');
       else throw new Error('Caricamento file fallito (' + r.status + ')');
@@ -374,6 +409,7 @@ const Sync = {
   },
   async run() {
     if (!this.enabled()) { this.setState('local'); return; }
+    if (!navigator.onLine) { this.setState('offline'); return; }
     if (this.busy) { this.again = true; return; }
     this.busy = true; this.setState('saving');
     try {
@@ -382,7 +418,7 @@ const Sync = {
       for (let attempt = 0; attempt < 4 && !ok; attempt++) {
         const remote = await this.readJson('data.json');
         const merged = remote.data ? mergeDB(DB, remote.data) : DB;
-        DB = merged; lsSet(LS.data, DB);
+        DB = merged; ensureHome(); lsSet(LS.data, DB);
         if (remote.data && !differs(merged, remote.data)) { lsSet(LS.sha, remote.sha); ok = true; break; }
         const res = await this.push(merged, remote.sha);
         if (res.conflict) continue;
@@ -431,7 +467,7 @@ function importInbox(entries) {
       const docDate = e.docDate || received;
       newDoc({
         id: docId, title: `${s.label || 'Mail'} – ${e.docDate ? 'bolletta del ' + fmtDate(e.docDate, true) : (e.subject || 'nuova mail').slice(0, 60)}`,
-        section: s.category === 'multe' ? 'multe' : 'casa', category: s.category || 'altro', sub: s.sub || '',
+        section: s.category === 'multe' ? 'multe' : 'casa', category: s.category || 'altro', sub: s.sub || '', homeId: s.homeId || null,
         status: s.status || 'da_pagare', amount: e.amount != null ? e.amount : null, docDate, dueDate: e.dueDate || null,
         pages: (e.attachments || []).map((a) => ({ path: a.path, type: /\.pdf$/i.test(a.path) ? 'pdf' : 'jpg', name: a.name || '' })),
         source: 'mail', unseen: true,
@@ -468,7 +504,7 @@ window.addEventListener('hashchange', () => {
 });
 
 /* ================================================================ UI state */
-const UI = Object.assign({ paySeg: 'due', multeSeg: 'due', search: '', paidYear: 'all', catFilter: {} }, lsGet(LS.ui, {}));
+const UI = Object.assign({ paySeg: 'due', multeSeg: 'due', search: '', paidYear: 'all', catFilter: {}, home: 'all' }, lsGet(LS.ui, {}));
 function setUI(patch) { Object.assign(UI, patch); lsSet(LS.ui, UI); render(); }
 
 /* ================================================================ render */
@@ -490,7 +526,7 @@ function render(routeChanged) {
   const views = {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
-    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags,
+    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes,
   };
   const fn = views[route.name] || viewPayments;
   const out = fn(route);
@@ -506,7 +542,7 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['impostazioni', 'calendario', 'mail', 'tag'].includes(route.name)) tab = 'altro';
+  if (['impostazioni', 'calendario', 'mail', 'tag', 'case'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
   const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
@@ -514,7 +550,7 @@ function renderTabs(route) {
       h('span', { class: 'tab-ic' }, icon(ic), k === 'pagamenti' && unseen ? h('span', { class: 'tab-dot' }, unseen) : null), label))));
 }
 function syncPill() {
-  const labels = { local: 'Solo locale', idle: 'Salvato', saving: 'Salvo…', error: 'Errore sync', offline: 'Offline' };
+  const labels = { local: 'Solo locale', idle: 'Salvato', saving: 'Salvo…', error: 'Errore sync', offline: 'Offline, in attesa' };
   return h('button', { class: 'sync-pill ' + Sync.state, onclick: () => go('impostazioni'), title: Sync.error || '' },
     h('span', { class: 'dot' }), labels[Sync.state] + (pendingCount ? ` · ${pendingCount} file` : ''));
 }
@@ -526,7 +562,7 @@ function topBar(title, opts = {}) {
     opts.noSync ? null : syncPill(),
   ];
 }
-const fab = (label, onclick) => h('button', { class: 'fab', 'aria-label': label, onclick }, icon('camera'));
+const fab = (label, onclick) => h('button', { class: 'fab', 'aria-label': label, onclick }, icon('plus', 2.4));
 function segmented(options, value, onPick) {
   return h('div', { class: 'segmented', role: 'group' }, options.map(([k, label, count]) =>
     h('button', { 'aria-pressed': String(k === value), onclick: () => onPick(k) }, label, count != null ? h('span', { class: 'count' }, count) : null)));
@@ -551,6 +587,7 @@ function docRow(d, opts = {}) {
     d.amount != null ? h('span', { class: 'm amt' }, fmtEuro(d.amount)) : null,
     d.dueDate && d.status !== 'pagato' ? h('span', { class: late ? 'badge late' : soon ? 'badge soon' : 'm' }, late ? null : icon('clock'), (late ? 'Scaduta ' : dueLabel(d) === 'Fine garanzia' ? 'Garanzia fino al ' : '') + fmtDate(d.dueDate)) : null,
     d.status === 'pagato' && d.paidAt ? h('span', { class: 'm' }, 'Pagato il ' + fmtDate(d.paidAt)) : null,
+    multiHome() && d.section !== 'multe' && opts.showHome !== false && !homeById(UI.home) ? h('span', { class: 'm home-tag' }, icon('home'), docHome(d).name) : null,
     opts.showCat === false ? null : h('span', { class: 'm' }, catLabel(d)),
     w && opts.showWork !== false ? h('span', { class: 'm' }, icon('hammer'), w.name) : null,
     (d.tags || []).map(tag).filter(Boolean).map((t) => h('span', { class: 'badge lbl', style: `--c:${t.color}` }, t.name)),
@@ -582,12 +619,13 @@ function totBox(label, arr) {
     missing ? h('span', { class: 'small' }, `+ ${missing} senza importo`) : null);
 }
 function viewPayments() {
-  const open = docs().filter(OPEN);
-  const paid = docs().filter((d) => d.status === 'pagato');
-  const body = [syncBanner(), segmented([['due', 'Da pagare', open.length], ['paid', 'Pagati', paid.length]], UI.paySeg, (k) => setUI({ paySeg: k }))];
+  const mine = docs().filter(inHomeFilter);
+  const open = mine.filter(OPEN);
+  const paid = mine.filter((d) => d.status === 'pagato');
+  const body = [syncBanner(), homeChips(), segmented([['due', 'Da pagare', open.length], ['paid', 'Pagati', paid.length]], UI.paySeg, (k) => setUI({ paySeg: k }))];
   if (UI.paySeg === 'due') {
     const t = todayISO(), in30 = addDaysISO(t, 30);
-    const fresh = docs().filter((d) => d.unseen).sort(byDue);
+    const fresh = mine.filter((d) => d.unseen).sort(byDue);
     const rest = open.filter((d) => !d.unseen);
     const groups = [
       ['Scaduti', rest.filter((d) => d.dueDate && d.dueDate < t)],
@@ -600,7 +638,7 @@ function viewPayments() {
       totBox('Da pagare', toPay), totBox('In addebito', debit)));
     if (fresh.length) body.push(h('div', { class: 'group-title alert' }, icon('mail'), `Nuovi dalla mail (${fresh.length})`), list(fresh));
     for (const [title, arr] of groups) if (arr.length) body.push(h('div', { class: 'group-title' }, `${title} (${arr.length})`), list(arr.sort(byDue)));
-    if (!open.length && !fresh.length) body.push(h('div', { class: 'empty' }, 'Niente da pagare. Scatta una foto con il pulsante in basso.'));
+    if (!open.length && !fresh.length) body.push(h('div', { class: 'empty' }, 'Niente da pagare. Aggiungi un documento con il pulsante + in basso.'));
   } else {
     const years = [...new Set(paid.map((d) => (d.paidAt || docYear(d)).slice(0, 4)))].sort().reverse();
     if (UI.paidYear !== 'all' && !years.includes(UI.paidYear)) UI.paidYear = 'all';
@@ -629,16 +667,16 @@ function viewArchive() {
   const q = UI.search.trim().toLowerCase();
   const search = h('input', { class: 'search', type: 'search', placeholder: 'Cerca in tutti i documenti…', value: UI.search,
     oninput: (e) => { UI.search = e.target.value; lsSet(LS.ui, UI); clearTimeout(viewArchive.t); viewArchive.t = setTimeout(() => { const el = document.activeElement; const pos = el && el.selectionStart; render(true); const s = $('.search'); if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (er) { /* */ } } }, 250); } });
-  const body = [syncBanner(), search];
+  const body = [syncBanner(), homeChips(), search];
   if (q) {
-    const res = docs().filter((d) => docMatches(d, q)).sort(byDateDesc);
+    const res = docs().filter(inHomeFilter).filter((d) => docMatches(d, q)).sort(byDateDesc);
     body.push(res.length ? list(res) : h('div', { class: 'empty' }, 'Nessun documento trovato.'));
   } else {
-    const all = docs().filter((d) => d.section !== 'multe');
+    const all = docs().filter((d) => d.section !== 'multe').filter(inHomeFilter);
     body.push(h('div', { class: 'list' }, CATS.map((c) => {
       const arr = all.filter((d) => d.category === c.id);
       const open = arr.filter(OPEN).length;
-      const extra = c.works ? `${works().length} lavori · ` : '';
+      const extra = c.works ? `${worksInFilter().length} lavori · ` : '';
       return h('button', { class: 'card-link', onclick: () => go('cat/' + c.id) },
         h('span', { class: 'ic' }, icon(c.icon)),
         h('span', { class: 't' }, h('b', null, c.name), h('span', null, `${extra}${arr.length} documenti${open ? ` · ${open} da pagare` : ''}`)),
@@ -652,6 +690,9 @@ function viewArchive() {
   }
   return { top: topBar('Archivio'), body, fab: fab('Nuovo documento', () => go('nuovo')) };
 }
+/* lavori: appartengono a una casa (se non indicata, la prima) */
+const workHomeId = (w) => (homeById(w.homeId) ? w.homeId : homes()[0].id);
+const worksInFilter = () => works().filter((w) => !multiHome() || !homeById(UI.home) || workHomeId(w) === UI.home);
 function yearGroups(arr, opts) {
   const out = [];
   const years = [...new Set(arr.map(docYear))].sort().reverse();
@@ -664,25 +705,25 @@ function yearGroups(arr, opts) {
 function viewCategory(route) {
   const c = catById(route.arg);
   if (!c) return { top: topBar('Non trovato', { back: 'archivio', small: true }), body: [h('div', { class: 'empty' }, 'Categoria sconosciuta.')] };
-  const arr = docs().filter((d) => d.category === c.id && d.section !== 'multe');
+  const arr = docs().filter((d) => d.category === c.id && d.section !== 'multe').filter(inHomeFilter);
   const f = UI.catFilter[c.id] || 'all';
   const subsUsed = c.subs.filter((s) => arr.some((d) => d.sub === s));
-  const body = [];
+  const body = [homeChips()];
   if (subsUsed.length) body.push(h('div', { class: 'chips' }, [['all', 'Tutti'], ...subsUsed.map((s) => [s, s])].map(([k, l]) =>
     h('button', { class: 'chip', 'aria-pressed': String(f === k), onclick: () => { UI.catFilter[c.id] = k; setUI({}); } }, l))));
   const sel = arr.filter((d) => f === 'all' || d.sub === f);
   if (c.works) {
-    const ws = works();
+    const ws = worksInFilter();
     body.push(h('div', { class: 'group-title' }, 'Lavori'));
     body.push(h('div', { class: 'list' },
       ws.map((w) => {
         const wd = arr.filter((d) => d.workId === w.id);
         return h('button', { class: 'card-link', onclick: () => go('lavoro/' + w.id) },
           h('span', { class: 'ic' }, icon('folder')),
-          h('span', { class: 't' }, h('b', null, w.name), h('span', null, `${wd.length} documenti${sum(wd) ? ' · ' + fmtEuro(sum(wd)) : ''}`)),
+          h('span', { class: 't' }, h('b', null, w.name), h('span', null, `${multiHome() && !homeById(UI.home) ? homeById(workHomeId(w)).name + ' · ' : ''}${wd.length} documenti${sum(wd) ? ' · ' + fmtEuro(sum(wd)) : ''}`)),
           h('span', { class: 'chev' }, icon('chev')));
       }),
-      h('button', { class: 'btn', onclick: () => { const n = prompt('Nome del lavoro (es. "Bagno 2026", "Infissi")'); if (n && n.trim()) { const w = createWork(n.trim()); go('lavoro/' + w.id); } } }, icon('plus'), 'Nuovo lavoro')));
+      h('button', { class: 'btn', onclick: () => { const n = prompt('Nome del lavoro (es. "Bagno 2026", "Infissi")'); if (n && n.trim()) { const w = createWork(n.trim(), defaultHomeId()); go('lavoro/' + w.id); } } }, icon('plus'), 'Nuovo lavoro')));
     const loose = sel.filter((d) => !work(d.workId));
     if (loose.length) body.push(h('div', { class: 'group-title' }, 'Senza lavoro assegnato'), list(loose.sort(byDateDesc), { showCat: false }));
   } else {
@@ -700,6 +741,12 @@ function viewWork(route) {
     h('div', { class: 'totals' },
       h('div', null, h('span', null, 'Totale documenti'), h('b', null, fmtEuro(sum(arr)) || '0 €')),
       h('div', null, h('span', null, 'Di cui da pagare'), h('b', null, fmtEuro(sum(arr.filter(OPEN))) || '0 €'))),
+    multiHome() ? h('div', { class: 'panel' }, h('div', { class: 'field' }, h('label', null, 'Abitazione'),
+      homeSelect(workHomeId(w), (v) => {
+        w.homeId = v; w.updatedAt = now();
+        for (const d of arr) { d.homeId = v; d.updatedAt = now(); }
+        persist();
+      }))) : null,
     h('div', { class: 'panel' }, h('h2', null, 'Note sul lavoro'),
       h('textarea', { class: 'input', placeholder: 'Ditta, contatti, detrazioni, cosa è stato fatto…', value: w.notes || '', onchange: (e) => { w.notes = e.target.value; w.updatedAt = now(); persist(); } })))];
   const subs = catById('lavori').subs;
@@ -744,10 +791,12 @@ function viewMore() {
     body: [h('div', { class: 'list' },
       card('mail', 'mail', 'Mail automatica', `${DB.meta.mailbox || 'nessuna casella'} · ${ss.length} mittenti${INBOX.lastRun ? ' · ultimo controllo ' + new Date(INBOX.lastRun).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ' · script non ancora attivo'}`),
       card('calendario', 'cal', 'Calendario', cals.length ? cals.join(' · ') : 'Nessun indirizzo'),
+      card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
       card('cat/lavori', 'hammer', 'Lavori e ristrutturazioni', `${works().length} lavori`),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
       card('impostazioni', 'sync', 'Sincronizzazione e backup', Sync.enabled() ? 'Collegata a GitHub' : 'Non configurata'),
     ), h('p', { class: 'footer-meta' }, `${docs().length} documenti · ${docs().reduce((s, d) => s + (d.pages || []).length, 0)} file`)],
+    fab: fab('Nuovo documento', () => go('nuovo')),
   };
 }
 
@@ -765,7 +814,7 @@ function viewSettings() {
     try {
       const data = JSON.parse(await file.text());
       if (!data.docs) throw new Error('Formato non riconosciuto');
-      DB = mergeDB(DB, data); persist(); toast('Importato e unito ai dati esistenti');
+      DB = mergeDB(DB, data); ensureHome(); persist(); toast('Importato e unito ai dati esistenti');
     } catch (err) { alert('Importazione fallita: ' + err.message); }
   } });
   return {
@@ -883,6 +932,8 @@ function viewMail() {
           h('div', { class: 'inline' },
             catSelect(s.category || 'utenze', (v) => upd(i, { category: v, sub: '' }), true),
             subSelect(s.category || 'utenze', s.sub || '', (v) => upd(i, { sub: v }))),
+          multiHome() && s.category !== 'multe' ? h('div', { class: 'field' }, h('label', null, 'Abitazione'),
+            homeSelect(homeById(s.homeId) ? s.homeId : homes()[0].id, (v) => upd(i, { homeId: v }))) : null,
           h('div', { class: 'field' }, h('label', null, 'Stato quando arriva'),
             segmented([['da_pagare', 'Da pagare'], ['addebitata', 'Addebito'], ['none', '–']], s.status || 'da_pagare', (k) => { upd(i, { status: k }); render(); })),
           h('button', { class: 'btn ghost danger', onclick: () => { if (confirm('Rimuovere questo mittente?')) { save(ss.filter((_, k) => k !== i)); render(); } } }, icon('trash'), 'Rimuovi')))),
@@ -901,6 +952,40 @@ function viewMail() {
           h('li', null, 'Torna all\'editor, scegli la funzione ', h('code', null, 'setup'), ' e premi Esegui. Google chiede le autorizzazioni (Gmail, Calendar, connessioni esterne): accetta. Se dice "app non verificata": Avanzate → Vai al progetto.'),
           h('li', null, 'Fatto: controlla la casella ogni 15 minuti. Qui sopra vedrai l\'ora dell\'ultimo controllo.')))),
     ],
+  };
+}
+
+/* ---------------- Abitazioni */
+function viewHomes() {
+  const hs = homes();
+  const count = (id) => docs().filter((d) => d.section !== 'multe' && docHomeId(d) === id).length;
+  const save = (x, patch) => { Object.assign(x, patch, { updatedAt: now() }); persist({ render: false }); };
+  return {
+    top: topBar('Abitazioni', { back: 'altro', small: true }),
+    body: [h('div', { class: 'detail' },
+      h('p', { class: 'help', style: 'margin:0' }, hs.length > 1
+        ? 'Quando archivi un documento scegli a quale abitazione appartiene (le multe no). In Pagamenti e Archivio puoi filtrare per abitazione.'
+        : 'Finché c\'è una sola abitazione l\'app non chiede nulla: tutti i documenti vanno qui. Dalla seconda in poi, a ogni documento scegli la casa.'),
+      h('div', { class: 'list' }, hs.map((x) => h('div', { class: 'panel home-card' },
+        h('div', { class: 'field' }, h('label', null, 'Nome'), h('input', { class: 'input', value: x.name, onchange: (e) => { const v = e.target.value.trim(); if (v) save(x, { name: v }); } })),
+        h('div', { class: 'field' }, h('label', null, 'Indirizzo (facoltativo)'), h('input', { class: 'input', value: x.address || '', placeholder: 'Via…', onchange: (e) => save(x, { address: e.target.value.trim() }) })),
+        h('div', { class: 'inline', style: 'margin-top:10px' },
+          h('span', { class: 'small muted', style: 'flex:1' }, `${count(x.id)} documenti`),
+          hs.length > 1 ? h('button', { class: 'btn ghost danger', onclick: () => {
+            if (count(x.id)) { alert('Questa abitazione ha ancora documenti: spostali prima su un\'altra (dal documento, campo Abitazione).'); return; }
+            if (!confirm(`Eliminare "${x.name}"?`)) return;
+            save(x, { deleted: true }); if (UI.home === x.id) UI.home = 'all'; render();
+          } }, icon('trash'), 'Elimina') : null)))),
+      h('button', { class: 'btn primary', onclick: () => {
+        const n = prompt('Nome della nuova abitazione (es. "Casa al mare", "Via Galba")');
+        if (!n || !n.trim()) return;
+        if (hs.length === 1 && hs[0].name === 'Casa') {
+          const first = prompt('Come chiamo la casa che hai già (dove stanno i documenti attuali)?', 'Casa');
+          if (first && first.trim()) save(hs[0], { name: first.trim() });
+        }
+        const x = { id: uid('h'), name: n.trim(), address: '', order: (hs[hs.length - 1].order || 0) + 1000, createdAt: now(), updatedAt: now() };
+        DB.homes[x.id] = x; persist(); toast('Abitazione aggiunta');
+      } }, icon('plus'), 'Aggiungi abitazione'))],
   };
 }
 
@@ -938,15 +1023,15 @@ function subSelect(catId, value, onChange) {
     h('option', { value: '' }, subs.length ? 'Sottocategoria…' : 'Nessuna sottocategoria'),
     subs.map((s) => h('option', { value: s, selected: s === value }, s)));
 }
-function workSelect(value, onChange) {
+function workSelect(value, onChange, homeId) {
   const sel = h('select', { class: 'input', 'aria-label': 'Lavoro', onchange: (e) => {
     if (e.target.value === '__new') {
       const n = prompt('Nome del nuovo lavoro');
-      if (n && n.trim()) { const w = createWork(n.trim()); onChange(w.id); sel.replaceWith(workSelect(w.id, onChange)); } else e.target.value = value || '';
+      if (n && n.trim()) { const w = createWork(n.trim(), homeId); onChange(w.id); sel.replaceWith(workSelect(w.id, onChange, homeId)); } else e.target.value = value || '';
     } else onChange(e.target.value || null);
   } },
     h('option', { value: '' }, 'Nessun lavoro'),
-    works().map((w) => h('option', { value: w.id, selected: w.id === value }, w.name)),
+    works().filter((w) => !homeId || !multiHome() || workHomeId(w) === homeId || w.id === value).map((w) => h('option', { value: w.id, selected: w.id === value }, w.name)),
     h('option', { value: '__new' }, '+ Nuovo lavoro…'));
   return sel;
 }
@@ -979,30 +1064,97 @@ let ocrWorker = null;
 async function loadScript(src) {
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Download non riuscito: ' + src)); document.head.append(s); });
 }
+const absUrl = (p) => new URL(p, location.href).href;
+/* OCR (foto): motore e dizionario italiano sono nell'app stessa (vendor/ocr), scaricati solo al primo uso */
 async function ocrBlobs(blobs, onProgress) {
-  if (!window.Tesseract) await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
-  if (!ocrWorker) ocrWorker = await window.Tesseract.createWorker('ita', 1, { logger: (m) => { if (onProgress && m.status) onProgress(m.status, m.progress); } });
+  if (!window.Tesseract) await loadScript('vendor/ocr/tesseract.min.js');
+  if (!ocrWorker) ocrWorker = await window.Tesseract.createWorker('ita', 1, {
+    workerPath: absUrl('vendor/ocr/worker.min.js'), corePath: absUrl('vendor/ocr/'), langPath: absUrl('vendor/ocr'), workerBlobURL: false, gzip: true,
+    logger: (m) => { if (onProgress && m.status) onProgress(m.status, m.progress); },
+  });
   let text = '';
   for (const b of blobs) text += (await ocrWorker.recognize(b)).data.text + '\n';
   return text;
 }
+/* PDF: il testo è già dentro il file, lettura rapida e affidabile (pdf.js, nell'app) */
+async function pdfText(blob, maxPages = 3) {
+  if (!window.pdfjsLib) await loadScript('vendor/pdf/pdf.min.js');
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf/pdf.worker.min.js';
+  const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+  const lines = [];
+  for (let n = 1; n <= Math.min(pdf.numPages, maxPages); n++) {
+    const tc = await (await pdf.getPage(n)).getTextContent();
+    const rows = new Map();
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const y = Math.round(it.transform[5] / 3) * 3;
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push({ x: it.transform[4], s: it.str });
+    }
+    [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, its]) => lines.push(its.sort((a, b) => a.x - b.x).map((i) => i.s).join(' ').replace(/\s+/g, ' ').trim()));
+  }
+  return lines.join('\n');
+}
+async function textFromPages(pages, withOcr, onProgress) {
+  let text = '';
+  for (const p of pages.filter((x) => x.type === 'pdf')) { try { text += await pdfText(p.blob) + '\n'; } catch (e) { /* PDF scansionato o protetto */ } }
+  if (withOcr) { const imgs = pages.filter((x) => x.type !== 'pdf').slice(0, 3); if (imgs.length) text += await ocrBlobs(imgs.map((x) => x.blob), onProgress); }
+  return text.trim();
+}
+const OCR_LABELS = { 'recognizing text': 'Leggo il testo', 'loading language traineddata': 'Carico il dizionario italiano', 'initializing api': 'Preparo il lettore', 'loading tesseract core': 'Carico il lettore' };
 
 /* ---------------- Nuovo documento */
 let draft = null;
 function freshDraft(q) {
   const section = q.get('section') === 'multe' ? 'multe' : 'casa';
   const cat = section === 'multe' ? 'multe' : (q.get('cat') || 'utenze');
+  const w = work(q.get('work'));
   return {
-    key: q.toString(), pages: [], title: '', section, category: cat, sub: q.get('sub') || '', workId: q.get('work') || null,
+    key: q.toString(), pages: [], title: '', section, category: cat, sub: q.get('sub') || '', workId: w ? w.id : null,
+    homeId: w ? workHomeId(w) : defaultHomeId(),
     status: section === 'multe' || cat === 'utenze' || cat === 'condominio' ? 'da_pagare' : 'none',
     amount: '', docDate: todayISO(), dueDate: '', tags: [], notes: '', suggested: {}, ocrState: '',
+    fromShare: q.get('shared') === '1', shareLoaded: false,
   };
+}
+function applySuggestions(D, text) {
+  const r = window.DocParse.parseDocText(text, todayISO());
+  const found = [];
+  const free = (k, v) => !v || D.suggested[k];
+  if (r.amount != null && free('amount', D.amount)) { D.amount = euroInput(r.amount); D.suggested.amount = true; found.push('importo'); }
+  if (r.dueDate && free('dueDate', D.dueDate)) { D.dueDate = r.dueDate; D.suggested.dueDate = true; found.push('scadenza'); }
+  if (r.docDate && (D.docDate === todayISO() || D.suggested.docDate)) { D.docDate = r.docDate; D.suggested.docDate = true; found.push('data'); }
+  if (text) D.ocrText = text.slice(0, 4000);
+  return found;
 }
 function viewNew(route) {
   if (!draft || draft.key !== route.q.toString()) draft = freshDraft(route.q);
   const D = draft;
-  const redraw = () => { const y = window.scrollY; render(true); window.scrollTo(0, y); };
-  const addFiles = async (fl) => { D.ocrState = 'Preparo le pagine…'; redraw(); const ps = await filesToPages(fl); ps.forEach((p) => { p.url = URL.createObjectURL(p.blob); }); D.pages.push(...ps); D.ocrState = ''; redraw(); };
+  const redraw = () => { if (parseRoute().name !== 'nuovo' || draft !== D) return; const y = window.scrollY; render(true); window.scrollTo(0, y); };
+  const addFiles = async (fl) => {
+    D.ocrState = 'Preparo le pagine…'; redraw();
+    const ps = await filesToPages(fl); ps.forEach((p) => { p.url = URL.createObjectURL(p.blob); }); D.pages.push(...ps);
+    D.ocrState = '';
+    if (ps.some((p) => p.type === 'pdf')) {
+      D.ocrState = 'Leggo il PDF…'; redraw();
+      const text = await textFromPages(ps, false);
+      const found = text ? applySuggestions(D, text) : [];
+      if (!D.title && D.fromShare && fl[0] && fl[0].name) D.title = fl[0].name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').slice(0, 60);
+      D.ocrState = found.length ? `Dal PDF ho proposto: ${found.join(', ')}. Controlla i campi in giallo.` : (text ? 'Nel PDF non ho trovato importo o scadenza: compila a mano.' : 'Il PDF non contiene testo leggibile (è una scansione): usa la foto e "Leggi dalla foto".');
+    }
+    redraw();
+  };
+  if (D.fromShare && !D.shareLoaded) {
+    D.shareLoaded = true;
+    IDB.sharedTake().then(async (sh) => {
+      if (!sh) return;
+      const link = sh.url || (String(sh.text || '').match(/https?:\/\/\S+/) || [])[0];
+      if (sh.title && !D.title) D.title = String(sh.title).slice(0, 80);
+      if (sh.text || link) D.notes = [sh.text && sh.text !== link ? sh.text : '', link || ''].filter(Boolean).join('\n');
+      const files = (sh.files || []).map((f) => new File([f.blob], f.name || 'documento', { type: f.type || f.blob.type }));
+      if (files.length) await addFiles(files); else redraw();
+    }).catch(() => {});
+  }
   const sug = (k) => (D.suggested[k] ? ' suggested' : '');
   const unsug = (k) => { delete D.suggested[k]; };
   const pagesGrid = h('div', { class: 'pages' },
@@ -1016,57 +1168,79 @@ function viewNew(route) {
   );
   const images = D.pages.filter((p) => p.type !== 'pdf');
   const runOcr = async () => {
-    D.ocrState = 'Avvio lettura… (la prima volta il telefono scarica circa 6 MB, poi resta in cache)'; redraw();
+    D.ocrState = 'Avvio lettura… (la prima volta il telefono scarica circa 6 MB, poi resta salvato)'; redraw();
     try {
-      const text = await ocrBlobs(images.slice(0, 3).map((p) => p.blob), (st, pr) => {
-        const el = $('.ocr-state'); if (el) el.textContent = ({ 'recognizing text': 'Leggo il testo', 'loading language traineddata': 'Scarico il dizionario italiano', 'initializing api': 'Preparo il lettore' }[st] || st) + (pr ? ` ${Math.round(pr * 100)}%` : '');
-      });
-      const r = window.DocParse.parseDocText(text, todayISO());
-      const found = [];
-      if (r.amount != null) { D.amount = euroInput(r.amount); D.suggested.amount = true; found.push('importo'); }
-      if (r.dueDate) { D.dueDate = r.dueDate; D.suggested.dueDate = true; found.push('scadenza'); }
-      if (r.docDate) { D.docDate = r.docDate; D.suggested.docDate = true; found.push('data'); }
-      if (!D.notes.trim() && text.trim()) D.ocrText = text.trim().slice(0, 4000);
-      D.ocrState = found.length ? `Proposti: ${found.join(', ')}. Controllali (evidenziati in giallo) prima di salvare.` : 'Non ho trovato importo o date leggibili. Compila a mano.';
+      const text = await textFromPages(images, true, (st, pr) => { const el = $('.ocr-state'); if (el) el.textContent = (OCR_LABELS[st] || st) + (pr ? ` ${Math.round(pr * 100)}%` : ''); });
+      const found = applySuggestions(D, text);
+      D.ocrState = found.length ? `Proposti: ${found.join(', ')}. Controlla i campi in giallo prima di salvare.` : 'Non ho trovato importo o date leggibili. Compila a mano.';
     } catch (e) { D.ocrState = 'Lettura non riuscita: ' + e.message; }
     redraw();
   };
   const c = catById(D.category);
   const isMulte = D.section === 'multe';
   const save = async (btn) => {
-    if (!D.title.trim()) { alert('Dai un titolo al documento (es. "Engie ottobre", "Condominio rata 3").'); return; }
+    if (!D.title.trim()) { alert('Dai un titolo al documento (es. "Engie ottobre", "Condominio rata 3").'); $('.title-input').focus(); return; }
     if (Object.keys(D.suggested).length && !confirm('Importo e date sono stati proposti dalla lettura automatica. Li hai controllati?')) return;
     btn.disabled = true; btn.textContent = 'Salvo…';
     try {
       const d = newDoc({
         title: D.title.trim(), section: D.section, category: isMulte ? 'multe' : D.category, sub: isMulte ? '' : D.sub,
+        homeId: isMulte ? null : D.homeId,
         workId: !isMulte && c && c.works ? D.workId : null, status: D.status, amount: parseEuro(D.amount),
         docDate: D.docDate || todayISO(), dueDate: D.dueDate || null, tags: D.tags, notes: D.notes.trim(),
         ocrText: D.ocrText || '', paidAt: D.status === 'pagato' ? todayISO() : null,
       });
+      if (!isMulte && multiHome()) lsSet('dc.lastHome', D.homeId);
       d.pages = await storePages(d, D.pages, 0);
       D.pages.forEach((p, i) => fileCache.set(d.pages[i].path, p.url));
       draft = null;
       persist({ render: false });
       location.replace('#/doc/' + d.id);
-      toast(Sync.enabled() ? 'Salvato, carico i file…' : 'Salvato su questo dispositivo');
+      toast(!navigator.onLine ? 'Salvato sul telefono: si sincronizza appena torni online' : Sync.enabled() ? (d.pages.length ? 'Salvato, carico i file…' : 'Salvato') : 'Salvato su questo dispositivo');
     } catch (e) { btn.disabled = false; btn.textContent = 'Salva'; alert('Salvataggio non riuscito: ' + e.message); }
   };
+  /* condivisione: allega a una bolletta già creata dalla mail, senza file */
+  const attachTargets = D.fromShare && D.pages.length
+    ? docs().filter((d) => d.status !== 'pagato' || d.unseen).filter((d) => !(d.pages || []).length).sort((a, b) => (b.unseen - a.unseen) || (b.createdAt - a.createdAt)).slice(0, 5) : [];
+  const attachTo = async (d) => {
+    const patch = {};
+    const amt = parseEuro(D.amount);
+    if (amt != null && d.amount == null) patch.amount = amt;
+    if (D.dueDate && !d.dueDate) patch.dueDate = D.dueDate;
+    const msg = [patch.amount != null ? 'Importo: ' + fmtEuro(patch.amount) : null, patch.dueDate ? 'Scadenza: ' + fmtDate(patch.dueDate, true) : null].filter(Boolean);
+    if (msg.length && !confirm(`Allego il file a "${d.title}" e imposto:\n${msg.join('\n')}\n\nVa bene? (Annulla = allego solo il file)`)) { delete patch.amount; delete patch.dueDate; }
+    const stored = await storePages(d, D.pages, (d.pages || []).length);
+    D.pages.forEach((p, i) => fileCache.set(stored[i].path, p.url));
+    if (D.ocrText && !d.ocrText) patch.ocrText = D.ocrText;
+    draft = null;
+    updateDoc(d.id, Object.assign(patch, { pages: [...(d.pages || []), ...stored] }), { render: false });
+    location.replace('#/doc/' + d.id);
+    toast('File allegato');
+  };
+  const filesPanel = h('div', { class: 'panel' },
+    h('h2', null, 'Foto e file', h('span', { class: 'prog' }, D.pages.length ? `${D.pages.length}` : 'facoltativi')),
+    D.pages.length ? pagesGrid : h('p', { class: 'help', style: 'margin:0 0 10px' }, 'Fotografa il documento una pagina alla volta, oppure carica foto o PDF. Dai PDF l\'app propone da sola importo e scadenza.'),
+    h('div', { class: 'inline' },
+      h('button', { class: 'btn', onclick: () => pickFiles(true, false, addFiles) }, icon('camera'), D.pages.length ? 'Aggiungi pagina' : 'Scatta foto'),
+      h('button', { class: 'btn', onclick: () => pickFiles(false, true, addFiles) }, icon('upload'), 'Carica file')),
+    images.length ? h('button', { class: 'btn block', style: 'margin-top:10px', onclick: runOcr }, icon('scan'), 'Leggi importo e date dalla foto') : null,
+    D.ocrState ? h('p', { class: 'small ocr-state', style: 'margin:8px 0 0' }, D.ocrState) : null);
   const body = [h('div', { class: 'detail' },
-    h('div', { class: 'panel' },
-      h('h2', null, 'Pagine', h('span', { class: 'prog' }, D.pages.length ? `${D.pages.length}` : '')),
-      D.pages.length ? pagesGrid : h('p', { class: 'help', style: 'margin:0 0 10px' }, 'Fotografa il documento una pagina alla volta, oppure carica foto o PDF già salvati.'),
-      h('div', { class: 'inline' },
-        h('button', { class: 'btn primary', onclick: () => pickFiles(true, false, addFiles) }, icon('camera'), D.pages.length ? 'Aggiungi pagina' : 'Scatta foto'),
-        h('button', { class: 'btn', onclick: () => pickFiles(false, true, addFiles) }, icon('upload'), 'Carica file')),
-      images.length ? h('button', { class: 'btn block', style: 'margin-top:10px', onclick: runOcr }, icon('scan'), 'Leggi importo e date dalla foto') : null,
-      D.ocrState ? h('p', { class: 'small ocr-state', style: 'margin:8px 0 0' }, D.ocrState) : null),
+    attachTargets.length ? h('div', { class: 'panel attach' },
+      h('h2', null, icon('mail'), 'Allega a un documento esistente?'),
+      h('p', { class: 'help', style: 'margin:0 0 10px' }, 'Questi non hanno ancora un file (per esempio le bollette arrivate per mail).'),
+      h('div', { class: 'list' }, attachTargets.map((d) => h('button', { class: 'card-link', onclick: () => attachTo(d) },
+        h('span', { class: 'ic' }, icon(catById(d.category) ? catById(d.category).icon : 'file')),
+        h('span', { class: 't' }, h('b', null, d.title), h('span', null, catLabel(d) + (d.amount != null ? ' · ' + fmtEuro(d.amount) : ''))),
+        h('span', { class: 'chev' }, icon('chev'))))),
+      h('p', { class: 'help', style: 'margin:10px 0 0' }, 'Oppure compila qui sotto per creare un documento nuovo.')) : null,
     h('textarea', { class: 'title-input', rows: 1, placeholder: isMulte ? 'Titolo (es. Multa ZTL via Nazionale)' : 'Titolo (es. Engie ottobre)', value: D.title, oninput: (e) => { D.title = e.target.value; } }),
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], D.section, (k) => { D.section = k; if (k === 'multe') { D.status = 'da_pagare'; } else if (D.category === 'multe') D.category = 'utenze'; redraw(); }),
+      !isMulte && multiHome() ? h('div', { class: 'field' }, h('label', null, 'Abitazione'), homeSelect(D.homeId, (v) => { D.homeId = v; if (D.workId && work(D.workId) && workHomeId(work(D.workId)) !== v) D.workId = null; redraw(); })) : null,
       isMulte ? null : h('div', { class: 'field' }, h('label', null, 'Categoria'), catSelect(D.category, (v) => { D.category = v; D.sub = ''; if (['utenze', 'condominio'].includes(v) && D.status === 'none') D.status = 'da_pagare'; redraw(); })),
       !isMulte && c && c.subs.length ? h('div', { class: 'field' }, h('label', null, 'Sottocategoria'), subSelect(D.category, D.sub, (v) => { D.sub = v; redraw(); })) : null,
-      !isMulte && c && c.works ? h('div', { class: 'field' }, h('label', null, 'Lavoro'), workSelect(D.workId, (v) => { D.workId = v; })) : null,
+      !isMulte && c && c.works ? h('div', { class: 'field' }, h('label', null, 'Lavoro'), workSelect(D.workId, (v) => { D.workId = v; }, D.homeId)) : null,
       h('div', { class: 'field' }, h('label', null, 'Stato'),
         segmented([['da_pagare', 'Da pagare'], ['addebitata', 'Addebito'], ['pagato', 'Pagato'], ['none', '–']], D.status, (k) => { D.status = k; redraw(); })),
       h('div', { class: 'field' }, h('label', { for: 'n-amt' }, 'Importo (€)'),
@@ -1077,7 +1251,8 @@ function viewNew(route) {
         h('input', { class: 'input' + sug('docDate'), id: 'n-date', type: 'date', value: D.docDate, onchange: (e) => { D.docDate = e.target.value; unsug('docDate'); e.target.classList.remove('suggested'); } })),
       h('div', { class: 'field' }, h('label', null, 'Tag'), tagPicker(D.tags, (v) => { D.tags = v; })),
       h('div', { class: 'field' }, h('label', { for: 'n-notes' }, 'Note'),
-        h('textarea', { class: 'input', id: 'n-notes', placeholder: isMulte ? 'Targa, luogo, numero verbale, termine per lo sconto…' : 'Note', value: D.notes, oninput: (e) => { D.notes = e.target.value; } }))),
+        h('textarea', { class: 'input', id: 'n-notes', placeholder: isMulte ? 'Targa, luogo, numero verbale, termine per lo sconto…' : 'Note libere: numero contratto, ditta, cosa comprende…', value: D.notes, oninput: (e) => { D.notes = e.target.value; } }))),
+    filesPanel,
     h('button', { class: 'btn primary block', onclick: (e) => save(e.currentTarget) }, icon('check'), 'Salva'),
   )];
   return { top: topBar(isMulte ? 'Nuova multa' : 'Nuovo documento', { back: isMulte ? 'multe' : 'pagamenti', small: true }), body };
@@ -1142,16 +1317,17 @@ async function exportPdf(d, share) {
 const safeName = (s) => String(s || '').replace(/[\\/:*?"<>|#%]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'senza nome';
 function zipFolder(d) {
   if (d.section === 'multe') return `Multe/${docYear(d)}`;
+  const pre = multiHome() ? safeName(docHome(d).name) + '/' : '';
   const c = catById(d.category) || catById('altro');
   const w = work(d.workId);
-  if (c.works && w) return `${safeName(c.name)}/${safeName(w.name)}/${safeName(d.sub || 'Altro')}`;
-  return [safeName(c.name), docYear(d), d.sub ? safeName(d.sub) : null].filter(Boolean).join('/');
+  if (c.works && w) return `${pre}${safeName(c.name)}/${safeName(w.name)}/${safeName(d.sub || 'Altro')}`;
+  return pre + [safeName(c.name), docYear(d), d.sub ? safeName(d.sub) : null].filter(Boolean).join('/');
 }
 async function exportZip(onProgress) {
   if (!window.JSZip) await loadScript('vendor/jszip.min.js');
   const zip = new window.JSZip();
   const all = docs().filter((d) => (d.pages || []).length);
-  const csv = [['Cartella', 'Titolo', 'Categoria', 'Sottocategoria', 'Lavoro', 'Stato', 'Importo', 'Data documento', 'Scadenza', 'Pagato il', 'Tag', 'Note', 'File'].join(';')];
+  const csv = [['Cartella', 'Abitazione', 'Titolo', 'Categoria', 'Sottocategoria', 'Lavoro', 'Stato', 'Importo', 'Data documento', 'Scadenza', 'Pagato il', 'Tag', 'Note', 'File'].join(';')];
   const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""').replace(/\r?\n/g, ' ') + '"';
   const total = all.reduce((s, d) => s + d.pages.length, 0);
   let done = 0, failed = 0;
@@ -1164,7 +1340,7 @@ async function exportZip(onProgress) {
       try { zip.file(`${folder}/${name}`, await fileBlob(p.path)); names.push(name); } catch (e) { failed++; }
       done++; if (onProgress) onProgress(done, total);
     }
-    csv.push([folder, d.title, d.section === 'multe' ? 'Multe' : (catById(d.category) || {}).name, d.sub, (work(d.workId) || {}).name, STATUS[d.status] ? STATUS[d.status].label : '',
+    csv.push([folder, d.section === 'multe' ? '' : docHome(d).name, d.title, d.section === 'multe' ? 'Multe' : (catById(d.category) || {}).name, d.sub, (work(d.workId) || {}).name, STATUS[d.status] ? STATUS[d.status].label : '',
       d.amount != null ? euroInput(d.amount) : '', d.docDate, d.dueDate, d.paidAt, (d.tags || []).map((t) => tag(t) && tag(t).name).filter(Boolean).join(', '), d.notes, names.join(' | ')].map(q).join(';'));
   }
   zip.file('elenco.csv', '﻿' + csv.join('\r\n'));
@@ -1190,6 +1366,17 @@ function viewDoc(route) {
     stored.forEach((s, k) => fileCache.set(s.path, ps[k].url));
     set({ pages: [...(d.pages || []), ...stored] }, true);
     toast(ps.length === 1 ? 'Pagina aggiunta' : `${ps.length} pagine aggiunte`);
+    if (ps.some((p) => p.type === 'pdf')) {
+      const text = await textFromPages(ps, false).catch(() => '');
+      const r = text ? window.DocParse.parseDocText(text, todayISO()) : {};
+      const patch = {};
+      if (r.amount != null && r.amount !== d.amount) patch.amount = r.amount;
+      if (r.dueDate && r.dueDate !== d.dueDate) patch.dueDate = r.dueDate;
+      const msg = [patch.amount != null ? `Importo: ${fmtEuro(patch.amount)}${d.amount != null ? ' (ora ' + fmtEuro(d.amount) + ')' : ''}` : null,
+        patch.dueDate ? `${dueLabel(d)}: ${fmtDate(patch.dueDate, true)}${d.dueDate ? ' (ora ' + fmtDate(d.dueDate, true) + ')' : ''}` : null].filter(Boolean);
+      if (text && !d.ocrText) set({ ocrText: text.slice(0, 4000) });
+      if (msg.length && confirm('Dal PDF ho letto:\n' + msg.join('\n') + '\n\nLi applico al documento?')) set(patch, true);
+    }
   };
   const thumbs = h('div', { class: 'pages' }, (d.pages || []).map((p, i) => {
     const cell = h('button', { class: 'page', onclick: () => openViewer(d, i), 'aria-label': 'Apri pagina ' + (i + 1) },
@@ -1204,11 +1391,11 @@ function viewDoc(route) {
     set({ pages: d.pages.filter((_, k) => k !== i) }, true);
   };
   const ocrExisting = async (btn) => {
-    const imgs = (d.pages || []).filter((p) => p.type !== 'pdf').slice(0, 3);
-    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Leggo… (la prima volta scarica circa 6 MB)';
+    const imgs = (d.pages || []).slice(0, 4);
+    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Leggo… (la prima volta carica circa 6 MB)';
     try {
-      const blobs = []; for (const p of imgs) blobs.push(await fileBlob(p.path));
-      const r = window.DocParse.parseDocText(await ocrBlobs(blobs), todayISO());
+      const loaded = []; for (const p of imgs) loaded.push({ type: p.type, blob: await fileBlob(p.path) });
+      const r = window.DocParse.parseDocText(await textFromPages(loaded, true), todayISO());
       const msg = [r.amount != null ? 'Importo: ' + fmtEuro(r.amount) : null, r.dueDate ? 'Scadenza: ' + fmtDate(r.dueDate, true) : null, r.docDate ? 'Data: ' + fmtDate(r.docDate, true) : null].filter(Boolean);
       if (!msg.length) alert('Non ho trovato importo o date leggibili.');
       else if (confirm('Ho letto:\n' + msg.join('\n') + '\n\nApplico questi valori al documento?')) {
@@ -1255,13 +1442,14 @@ function viewDoc(route) {
           h('span', { style: 'flex:1' }, `Pagina ${i + 1}${p.name ? ' · ' + p.name : ''}${p.size ? ' · ' + Math.round(p.size / 1024) + ' KB' : ''}`),
           i > 0 ? h('button', { class: 'icon-btn plain', 'aria-label': 'Sposta prima', onclick: () => { const a = [...d.pages]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; set({ pages: a }, true); } }, icon('left')) : null,
           h('button', { class: 'icon-btn plain', 'aria-label': 'Togli pagina', onclick: () => removePage(i) }, icon('trash')))))) : null,
-      (d.pages || []).some((p) => p.type !== 'pdf') ? h('button', { class: 'btn ghost', style: 'margin-top:6px', onclick: (e) => ocrExisting(e.currentTarget) }, icon('scan'), 'Leggi importo e date dalle foto') : null),
+      (d.pages || []).length ? h('button', { class: 'btn ghost', style: 'margin-top:6px', onclick: (e) => ocrExisting(e.currentTarget) }, icon('scan'), 'Leggi importo e date dai file') : null),
     mailPanel,
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], d.section, (k) => set({ section: k, category: k === 'multe' ? 'multe' : (d.category === 'multe' ? 'altro' : d.category) }, true)),
+      !isMulte && multiHome() ? h('div', { class: 'field' }, h('label', null, 'Abitazione'), homeSelect(docHomeId(d), (v) => set({ homeId: v, workId: d.workId && work(d.workId) && workHomeId(work(d.workId)) !== v ? null : d.workId }, true))) : null,
       isMulte ? null : h('div', { class: 'field' }, h('label', null, 'Categoria'), catSelect(d.category, (v) => set({ category: v, sub: '', workId: catById(v).works ? d.workId : null }, true))),
       !isMulte && c && c.subs.length ? h('div', { class: 'field' }, h('label', null, 'Sottocategoria'), subSelect(d.category, d.sub, (v) => set({ sub: v }, true))) : null,
-      !isMulte && c && c.works ? h('div', { class: 'field' }, h('label', null, 'Lavoro'), workSelect(d.workId, (v) => set({ workId: v }))) : null,
+      !isMulte && c && c.works ? h('div', { class: 'field' }, h('label', null, 'Lavoro'), workSelect(d.workId, (v) => set({ workId: v }), docHomeId(d))) : null,
       h('div', { class: 'field' }, h('label', { for: 'd-amt' }, 'Importo (€)'),
         h('input', { class: 'input', id: 'd-amt', inputmode: 'decimal', placeholder: '0,00', value: euroInput(d.amount), onchange: (e) => set({ amount: parseEuro(e.target.value) }) })),
       h('div', { class: 'field' }, h('label', { for: 'd-due' }, dueLabel(d)),
@@ -1283,6 +1471,11 @@ function viewDoc(route) {
 
 /* ================================================================ avvio */
 if (!location.hash) history.replaceState(null, '', '#/pagamenti');
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === '127.0.0.1')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+window.addEventListener('offline', () => Sync.setState('offline'));
 navStack.push(parseRoute().raw);
 refreshPending().then(() => render());
 render(true);

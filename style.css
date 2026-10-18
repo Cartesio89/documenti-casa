@@ -377,3 +377,8 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .progress { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 8px; }
 .progress span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
 .segmented:has(button:nth-child(4)) button { font-size: 13px; padding: 0 3px; }
+.meta .home-tag { color: var(--accent-text); font-weight: 500; }
+.chip svg { width: 14px; height: 14px; }
+.panel.attach { border-color: var(--accent); }
+.panel.attach .card-link { border-color: var(--line-strong); }
+.home-card .field + .field { margin-top: 10px; }
