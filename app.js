@@ -177,6 +177,8 @@ const docYear = (d) => (d.docDate || new Date(d.createdAt || now()).toISOString(
 
 function persist(opts = {}) {
   dupCache = null;
+  const other = lsGet(LS.data, null); // un'altra scheda può aver salvato nel frattempo
+  if (other && other !== DB) { DB = mergeDB(DB, other); ensureHome(); }
   lsSet(LS.data, DB);
   lsSet(LS.dirty, true);
   Sync.schedule();
@@ -592,7 +594,7 @@ function render(routeChanged) {
   const views = {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
-    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups,
+    impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups, cestino: viewTrash,
   };
   const fn = views[route.name] || viewPayments;
   const out = fn(route);
@@ -608,7 +610,7 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni'].includes(route.name)) tab = 'altro';
+  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
   const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
@@ -861,6 +863,7 @@ function viewMore() {
       card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
       card('cat/lavori', 'hammer', 'Lavori e ristrutturazioni', `${works().length} lavori`),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
+      deletedDocs().length ? card('cestino', 'trash', `Cestino (${deletedDocs().length})`, 'Documenti eliminati: puoi ripristinarli') : null,
       dupCount() ? card('doppioni', 'file', `Possibili doppioni (${dupCount()})`, 'Controlla e decidi cosa tenere') : null,
       card('impostazioni', 'sync', 'Sincronizzazione e backup', Sync.enabled() ? 'Collegata a GitHub' : 'Non configurata'),
     ), h('p', { class: 'footer-meta' }, `${docs().length} documenti · ${docs().reduce((s, d) => s + (d.pages || []).length, 0)} file`)],
@@ -1020,6 +1023,21 @@ function viewMail() {
           h('li', null, 'Torna all\'editor, scegli la funzione ', h('code', null, 'setup'), ' e premi Esegui. Google chiede le autorizzazioni (Gmail, Calendar, connessioni esterne): accetta. Se dice "app non verificata": Avanzate → Vai al progetto.'),
           h('li', null, 'Fatto: controlla la casella ogni 15 minuti. Qui sopra vedrai l\'ora dell\'ultimo controllo.')))),
     ],
+  };
+}
+
+/* ---------------- Cestino */
+const deletedDocs = () => Object.values(DB.docs).filter((d) => d.deleted).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+function viewTrash() {
+  const arr = deletedDocs();
+  return {
+    top: topBar('Cestino', { back: 'altro', small: true }),
+    body: [h('div', { class: 'detail' },
+      h('p', { class: 'help', style: 'margin:0' }, 'I documenti eliminati restano qui con le loro foto e i file. Ripristina rimette il documento com\'era.'),
+      arr.length ? h('div', { class: 'list' }, arr.map((d) => h('div', { class: 'proj-row' },
+        h('span', { style: 'flex:1;min-width:0' }, h('b', null, d.title || '(senza titolo)'), h('br'),
+          h('span', { class: 'small muted' }, `${catLabel(d)}${d.amount != null ? ' · ' + fmtEuro(d.amount) : ''} · eliminato il ${new Date(d.updatedAt).toLocaleDateString('it-IT')}`)),
+        h('button', { class: 'btn', onclick: () => { updateDoc(d.id, { deleted: false }); toast('Ripristinato'); } }, 'Ripristina')))) : h('div', { class: 'empty' }, 'Il cestino è vuoto.'))],
   };
 }
 
@@ -1596,6 +1614,11 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 window.addEventListener('offline', () => Sync.setState('offline'));
+/* più schede aperte: quando un'altra scheda salva, questa unisce subito le modifiche */
+window.addEventListener('storage', (e) => {
+  if (e.key !== LS.data || !e.newValue) return;
+  try { DB = mergeDB(DB, JSON.parse(e.newValue)); ensureHome(); dupCache = null; render(); } catch (err) { /* ignorato */ }
+});
 navStack.push(parseRoute().raw);
 refreshPending().then(() => render());
 render(true);
