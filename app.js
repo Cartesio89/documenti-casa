@@ -114,6 +114,7 @@ const CATS = [
   { id: 'utenze', name: 'Utenze', icon: 'bolt', subs: ['Luce e gas', 'Luce', 'Gas', 'Acqua', 'Internet e telefono', 'Rifiuti', 'Altro'] },
   { id: 'condominio', name: 'Condominio', icon: 'building', subs: ['Rate', 'Spese straordinarie', 'Verbali e comunicazioni', 'Altro'] },
   { id: 'assicurazioni', name: 'Assicurazioni', icon: 'shield', subs: ['Casa', 'Auto e moto', 'Vita e salute', 'Altro'] },
+  { id: 'bollo', name: 'Bollo', icon: 'car', subs: ['Auto', 'Moto', 'Altro'] },
   { id: 'mutuo', name: 'Mutuo', icon: 'bank', subs: ['Contratto', 'Rate', 'Comunicazioni banca', 'Altro'] },
   { id: 'lavori', name: 'Lavori e ristrutturazioni', icon: 'hammer', works: true, subs: ['Preventivi', 'Contratti', 'Fatture', 'Pagamenti', 'Pratiche e permessi', 'Altro'] },
   { id: 'elettro', name: 'Elettrodomestici e mobili', icon: 'sofa', subs: ['Scontrini', 'Pagamenti', 'Garanzie'] },
@@ -1227,7 +1228,7 @@ function freshDraft(q) {
   return {
     key: q.toString(), pages: [], title: '', section, category: cat, sub: q.get('sub') || '', workId: w ? w.id : null,
     homeId: w ? workHomeId(w) : defaultHomeId(),
-    status: section === 'multe' || cat === 'utenze' || cat === 'condominio' ? 'da_pagare' : 'none',
+    status: section === 'multe' || ['utenze', 'condominio', 'bollo'].includes(cat) ? 'da_pagare' : 'none',
     amount: '', docDate: todayISO(), dueDate: '', tags: [], notes: '', suggested: {}, ocrState: '',
     fromShare: q.get('shared') === '1', shareLoaded: false, mode: q.get('shared') === '1' ? 'file' : 'manual',
   };
@@ -1368,7 +1369,7 @@ function viewNew(route) {
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], D.section, (k) => { D.section = k; if (k === 'multe') { D.status = 'da_pagare'; } else if (D.category === 'multe') D.category = 'utenze'; redraw(); }),
       !isMulte && multiHome() ? h('div', { class: 'field' }, h('label', null, 'Abitazione'), homeSelect(D.homeId, (v) => { D.homeId = v; if (D.workId && work(D.workId) && workHomeId(work(D.workId)) !== v) D.workId = null; redraw(); })) : null,
-      isMulte ? null : h('div', { class: 'field' }, h('label', null, 'Categoria'), catSelect(D.category, (v) => { D.category = v; D.sub = ''; if (['utenze', 'condominio'].includes(v) && D.status === 'none') D.status = 'da_pagare'; redraw(); })),
+      isMulte ? null : h('div', { class: 'field' }, h('label', null, 'Categoria'), catSelect(D.category, (v) => { D.category = v; D.sub = ''; if (['utenze', 'condominio', 'bollo'].includes(v) && D.status === 'none') D.status = 'da_pagare'; redraw(); })),
       !isMulte && c && c.subs.length ? h('div', { class: 'field' }, h('label', null, 'Sottocategoria'), subSelect(D.category, D.sub, (v) => { D.sub = v; redraw(); })) : null,
       !isMulte && c && c.works ? h('div', { class: 'field' }, h('label', null, 'Lavoro'), workSelect(D.workId, (v) => { D.workId = v; }, D.homeId)) : null,
       h('div', { class: 'field' }, h('label', null, 'Stato'),
