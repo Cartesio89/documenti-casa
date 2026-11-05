@@ -87,12 +87,19 @@ async function vApi(path, opts = {}, token) {
     headers: Object.assign({ Authorization: 'Bearer ' + (token || V.token), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, opts.headers || {}),
   }));
 }
+/* Lettura byte-esatta. NON si usa il formato "raw" di GitHub: per file piccoli che sembrano testo
+   GitHub li converte in UTF-8 e corrompe i dati cifrati (bug trovato sul vault reale il 6/11).
+   Si legge il JSON (contenuto in base64, fino a 1 MB) e, per file più grandi, il blob git (base64). */
 async function vGetRaw(path, token) {
-  const r = await vApi('contents/' + path + '?ref=main', { headers: { Accept: 'application/vnd.github.raw' } }, token);
+  const r = await vApi('contents/' + path + '?ref=main', {}, token);
   if (r.status === 404) return null;
   if (r.status === 401 || r.status === 403) throw new Error('Token del vault non valido o senza accesso al repo (' + r.status + ')');
   if (!r.ok) throw new Error('Lettura dal vault fallita (' + r.status + ')');
-  return new Uint8Array(await r.arrayBuffer());
+  const j = await r.json();
+  if (j.content && j.encoding === 'base64') return b64ToU8(j.content);
+  const rb = await vApi('git/blobs/' + j.sha, {}, token);
+  if (!rb.ok) throw new Error('Lettura dal vault fallita (' + rb.status + ')');
+  return b64ToU8((await rb.json()).content);
 }
 async function vSha(path) {
   const r = await vApi('contents/' + path + '?ref=main');
@@ -316,7 +323,7 @@ async function vSync() {
     await vSaveIndexLocal();
     await vRefreshMeta().catch(() => {});
     V.state = 'ok'; V.error = '';
-  } catch (e) { V.state = 'error'; V.error = e.message; }
+  } catch (e) { V.state = 'error'; V.error = e.message || (e.name === 'OperationError' ? 'decifratura non riuscita (dati letti male da GitHub)' : String(e.name || e)); }
   finally {
     V.busy = false;
     if (parseRoute().name.startsWith('v')) render();
