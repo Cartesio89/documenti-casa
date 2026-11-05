@@ -69,6 +69,7 @@ const ICONS = {
   scan: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/>',
 };
@@ -586,7 +587,7 @@ document.addEventListener('focusout', () => setTimeout(() => { if (pendingRender
 
 function render(routeChanged) {
   const route = parseRoute();
-  if (!routeChanged && (isEditing() || route.name === 'nuovo' || !$('#viewer').hidden)) { pendingRender = true; return; }
+  if (!routeChanged && (isEditing() || route.name === 'nuovo' || route.name === 'vnuovo' || !$('#viewer').hidden)) { pendingRender = true; return; }
   pendingRender = false;
   if (currentRaw !== null && routeChanged) scrollMem[currentRaw] = window.scrollY;
   const sameRoute = currentRaw === route.raw;
@@ -596,6 +597,7 @@ function render(routeChanged) {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
     impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups, cestino: viewTrash,
+    vault: viewVault, vnuovo: viewVaultNew, vdoc: viewVaultDoc, vimpostazioni: viewVaultSettings,
   };
   const fn = views[route.name] || viewPayments;
   const out = fn(route);
@@ -611,7 +613,7 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino'].includes(route.name)) tab = 'altro';
+  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino', 'vault', 'vnuovo', 'vdoc', 'vimpostazioni'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
   const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
@@ -861,6 +863,7 @@ function viewMore() {
     body: [h('div', { class: 'list' },
       card('mail', 'mail', 'Mail automatica', `${DB.meta.mailbox || 'nessuna casella'} · ${ss.length} mittenti${INBOX.lastRun ? ' · ultimo controllo ' + new Date(INBOX.lastRun).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ' · script non ancora attivo'}`),
       card('calendario', 'cal', 'Calendario', cals.length ? cals.join(' · ') : 'Nessun indirizzo'),
+      card('vault', 'lock', 'Vault personale', vConfigured() ? (vUnlocked() ? 'Aperto · CUD, cedolini e documenti cifrati' : 'Chiuso · CUD, cedolini e documenti cifrati') : 'CUD e cedolini, cifrati con la tua frase segreta'),
       card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
       card('cat/lavori', 'hammer', 'Lavori e ristrutturazioni', `${works().length} lavori`),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
@@ -917,6 +920,10 @@ function viewSettings() {
             h('li', null, 'Permissions → Repository → ', h('b', null, 'Contents: Read and write'), '. Nient\'altro.'),
             h('li', null, 'Salvalo nel password manager: serve su ogni dispositivo, anche per la seconda persona.')),
           h('p', null, 'Il token resta solo su questo dispositivo. Ogni modifica e ogni foto diventano un commit nel repo privato: lo storico è anche il backup.'))),
+      h('div', { class: 'panel' },
+        h('h2', null, 'Cambio telefono'),
+        h('p', { class: 'help', style: 'margin:0 0 6px' }, 'Tutto (documenti, foto, impostazioni, mittenti mail, abitazioni) sta su GitHub. Sul telefono nuovo: apri l\'app, Altro → Sincronizzazione, incolla il token. Vault: Altro → Vault → "Collega vault esistente" con token del vault e frase.'),
+        h('p', { class: 'help', style: 'margin:0' }, 'Restano solo su questo telefono, da reinserire: il codice fiscale per Engie. ', pendingCount ? h('b', null, `Attenzione: ${pendingCount} file non ancora caricati, aspetta il pallino verde prima di cambiare telefono.`) : 'Nessun file in attesa: puoi cambiare telefono senza perdere niente.')),
       h('div', { class: 'panel' },
         h('h2', null, 'Backup'),
         h('div', { class: 'inline' },
@@ -1395,13 +1402,13 @@ async function openViewer(d, index) {
   let i = index;
   const show = async () => {
     const p = pages[i];
-    v.replaceChildren(h('div', { class: 'viewer-bar' },
+    v.replaceChildren(...[h('div', { class: 'viewer-bar' },
       h('span', null, `${i + 1} / ${pages.length}`),
       h('button', { class: 'icon-btn plain', 'aria-label': 'Chiudi', onclick: close }, icon('close'))),
     h('div', { class: 'viewer-body' }, h('p', { class: 'muted' }, 'Carico…')),
     pages.length > 1 ? h('div', { class: 'viewer-nav' },
       h('button', { class: 'icon-btn', 'aria-label': 'Precedente', disabled: i === 0, onclick: () => { i--; show(); } }, icon('left')),
-      h('button', { class: 'icon-btn', 'aria-label': 'Successiva', disabled: i === pages.length - 1, onclick: () => { i++; show(); } }, icon('right'))) : null);
+      h('button', { class: 'icon-btn', 'aria-label': 'Successiva', disabled: i === pages.length - 1, onclick: () => { i++; show(); } }, icon('right'))) : null].filter(Boolean));
     try {
       const url = await fileUrl(p.path);
       $('.viewer-body', v).replaceChildren(p.type === 'pdf'

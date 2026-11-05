@@ -393,3 +393,8 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .mode-bar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13.5px; }
 .mode-bar svg { width: 16px; height: 16px; flex: none; }
 @media (max-width: 360px) { .mode-bar button { flex-direction: column; gap: 2px; font-size: 12px; min-height: 52px; } }
+.vault-lock { text-align: center; }
+.vault-lock .field { text-align: left; }
+.vault-badge { width: 64px; height: 64px; border-radius: 20px; margin: 6px auto 8px; display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-text); }
+.vault-badge svg { width: 32px; height: 32px; }
+.sync-pill svg { width: 14px; height: 14px; }
