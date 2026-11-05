@@ -588,7 +588,7 @@ document.addEventListener('focusout', () => setTimeout(() => { if (pendingRender
 
 function render(routeChanged) {
   const route = parseRoute();
-  if (!routeChanged && (isEditing() || route.name === 'nuovo' || route.name === 'vnuovo' || !$('#viewer').hidden)) { pendingRender = true; return; }
+  if (!routeChanged && (isEditing() || route.name === 'nuovo' || route.name === 'vnuovo' || route.name === 'vmulti' || !$('#viewer').hidden)) { pendingRender = true; return; }
   pendingRender = false;
   if (currentRaw !== null && routeChanged) scrollMem[currentRaw] = window.scrollY;
   const sameRoute = currentRaw === route.raw;
@@ -598,7 +598,7 @@ function render(routeChanged) {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
     impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups, cestino: viewTrash,
-    vault: viewVault, vnuovo: viewVaultNew, vdoc: viewVaultDoc, vimpostazioni: viewVaultSettings,
+    vault: viewVault, vnuovo: viewVaultNew, vmulti: viewVaultMulti, vdoc: viewVaultDoc, vimpostazioni: viewVaultSettings,
   };
   const fn = views[route.name] || viewPayments;
   const out = fn(route);
@@ -614,7 +614,7 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino', 'vault', 'vnuovo', 'vdoc', 'vimpostazioni'].includes(route.name)) tab = 'altro';
+  if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino', 'vault', 'vnuovo', 'vmulti', 'vdoc', 'vimpostazioni'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
   const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>

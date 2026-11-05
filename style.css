@@ -398,3 +398,11 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .vault-badge { width: 64px; height: 64px; border-radius: 20px; margin: 6px auto 8px; display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-text); }
 .vault-badge svg { width: 32px; height: 32px; }
 .sync-pill svg { width: 14px; height: 14px; }
+.bulk-row { padding: 10px 12px; }
+.bulk-row.unsure { border-color: #D9A400; }
+.bulk-row .inline { flex-wrap: nowrap; gap: 6px; }
+.bulk-row select.input { min-width: 0; flex: 1; padding-left: 8px; padding-right: 4px; }
+.bulk-name { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin-bottom: 8px; min-width: 0; }
+.bulk-name span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulk-name svg { width: 16px; height: 16px; flex: none; }
+.bulk-name span { text-align: left; }

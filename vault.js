@@ -100,7 +100,24 @@ async function vSha(path) {
   if (!r.ok) throw new Error('Lettura dal vault fallita (' + r.status + ')');
   return (await r.json()).sha;
 }
-async function vPut(path, u8, sha, msg, token) {
+/* tutte le scritture su GitHub passano in fila: due commit insieme sullo stesso branch fanno fallire uno dei due (409) */
+let vQueue = Promise.resolve();
+const vWait = (ms) => new Promise((r) => setTimeout(r, ms));
+function vPut(path, u8, sha, msg, token) {
+  const job = vQueue.then(async () => {
+    let r;
+    for (let i = 0; i < 5; i++) {
+      try { r = await vPutOnce(path, u8, sha, msg, token); } catch (e) { r = null; if (i === 4) throw new Error('Rete non raggiungibile'); }
+      // 409 su un file nuovo = commit concorrente sul branch; 5xx/rete = errore temporaneo: si riprova
+      if (r && (r.ok || r.status === 401 || r.status === 403 || r.status === 404 || r.status === 422 || (r.status === 409 && sha))) return r;
+      await vWait(800 * (i + 1));
+    }
+    return r;
+  });
+  vQueue = job.catch(() => {});
+  return job;
+}
+async function vPutOnce(path, u8, sha, msg, token) {
   const body = { message: msg || 'vault', content: u8ToB64(u8), branch: 'main' };
   if (sha) body.sha = sha;
   return vApi('contents/' + path, { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }, token);
@@ -270,21 +287,29 @@ async function vPushIndex() {
     if (remoteSig !== null && remoteSig === vSig(V.index.items)) return; // niente di nuovo da scrivere
     const r = await vPut('index.enc', await vEncJson(V.index), sha, 'Indice aggiornato');
     if (r.ok) return;
+    if (r.status === 401 || r.status === 403) throw new Error('Il token del vault non ha il permesso di scrivere (Contents: Read and write) (' + r.status + ')');
     if (r.status !== 409 && r.status !== 422) throw new Error('Salvataggio indice fallito (' + r.status + ')');
+    await vWait(1500 * (i + 1)); // GitHub può restituire per qualche istante la versione precedente
   }
-  throw new Error('Conflitto non risolto');
+  throw new Error('Conflitto con GitHub non risolto, riprovo alla prossima apertura');
 }
 async function vSync() {
   if (!V.key || !navigator.onLine) { V.state = navigator.onLine ? 'idle' : 'offline'; return; }
   if (V.busy) { V.again = true; return; }
   V.busy = true; V.state = 'saving';
   try {
-    for (const id of await VDB.keys('pending')) {
+    const ids = await VDB.keys('pending');
+    V.upTotal = ids.length; V.upDone = 0;
+    for (const id of ids) {
       const ct = await VDB.get('pending', id);
       const r = await vPut('f/' + id + '.enc', ct, null, 'File');
       if (r.ok || r.status === 422) { await VDB.put('files', id, ct); await VDB.del('pending', id); }
-      else throw new Error('Caricamento file fallito (' + r.status + ')');
+      else throw new Error(r.status === 401 || r.status === 403 ? 'Il token del vault non ha il permesso di scrivere (' + r.status + ')' : 'Caricamento file fallito (' + r.status + ')');
+      V.upDone++;
+      const pill = $('.sync-pill'); if (pill && parseRoute().name.startsWith('v')) pill.replaceWith(vStatusPill());
+      if (V.upDone % 10 === 0) { await vPushIndex(); await vSaveIndexLocal(); } // ogni 10 file salva anche l'indice
     }
+    V.upTotal = 0;
     await vPushIndex();
     await vSaveIndexLocal();
     await vRefreshMeta().catch(() => {});
@@ -331,7 +356,7 @@ const vTitle = (x) => x.title || (x.kind === 'cedolino' ? `Cedolino ${x.month ? 
 let vSeg = 'cedolino';
 const vBack = (t) => topBar(t, { back: 'vault', small: true, noSync: true });
 function vStatusPill() {
-  const t = { ok: 'Cifrato e salvato', saving: 'Salvo…', error: 'Errore', offline: 'Offline, in attesa', idle: 'Aperto' }[V.state] || 'Aperto';
+  const t = { ok: 'Cifrato e salvato', saving: V.upTotal ? `Carico ${V.upDone}/${V.upTotal}` : 'Salvo…', error: 'Errore', offline: 'Offline, in attesa', idle: 'Aperto' }[V.state] || 'Aperto';
   return h('button', { class: 'sync-pill ' + (V.state === 'ok' ? 'idle' : V.state), title: V.error || '', onclick: () => vLock('Vault chiuso') }, icon('lock'), t);
 }
 
@@ -342,7 +367,8 @@ function viewVault() {
   const arr = all.filter((x) => x.kind === vSeg).sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.month || 0) - (a.month || 0)) || (b.createdAt - a.createdAt));
   const years = [...new Set(arr.map((x) => x.year || '—'))];
   const body = [
-    V.state === 'error' ? h('div', { class: 'banner' }, 'Problema di sincronizzazione: ', V.error) : null,
+    V.state === 'error' ? h('div', { class: 'banner' }, h('div', null, h('b', null, 'Problema di sincronizzazione: '), V.error, ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); vSync(); } }, 'Riprova'))) : null,
+    h('button', { class: 'btn block', style: 'margin-bottom:12px', onclick: () => go('vmulti') }, icon('upload'), 'Carica più documenti insieme'),
     segmented(VKINDS.map(([k, l]) => [k, l, all.filter((x) => x.kind === k).length]), vSeg, (k) => { vSeg = k; render(true); }),
     ...years.map((y) => [h('div', { class: 'group-title' }, String(y)),
       h('div', { class: 'list' }, arr.filter((x) => (x.year || '—') === y).map((x) => h('button', { class: 'card-link', onclick: () => go('vdoc/' + x.id) },
@@ -604,5 +630,105 @@ function viewVaultSettings() {
           if (!confirm('Scollegare il vault da questo dispositivo? I documenti restano su GitHub; per riaprirli qui serviranno di nuovo token e frase.')) return;
           vForget(); location.replace('#/altro');
         } }, 'Scollega da questo dispositivo')))],
+  };
+}
+
+/* ---------------- caricamento di molti documenti insieme ----------------
+ * Ogni file scelto diventa un documento. Tipo, anno e mese vengono proposti dal nome del file
+ * e, per i PDF, dal testo della prima pagina; si correggono a mano prima di salvare. */
+const MESI_RE = MESI.map((m) => m.slice(0, 3)).join('|');
+function vGuess(name, text) {
+  const n = String(name || '').toLowerCase().replace(/[_\-.]+/g, ' ');
+  const t = String(text || '').toLowerCase();
+  const all = n + '\n' + t.slice(0, 4000);
+  const g = { kind: 'cedolino', year: null, month: null };
+  if (/\bcud\b|\bcu\b|certificazione unica/.test(all)) g.kind = 'cud';
+  else if (!/cedolin|busta|paga|retribu|stipend|lul\b|libro unico/.test(all)) g.kind = /\d{4}/.test(n) ? 'cedolino' : 'altro';
+  if (/tredicesima|13\s*(ª|a)?\s*mensilit/.test(all)) g.month = 13;
+  if (/quattordicesima|14\s*(ª|a)?\s*mensilit/.test(all)) g.month = 13;
+  const yr = (str) => { const m = str.match(/\b(19[89]\d|20[0-4]\d)\b/); return m ? Number(m[1]) : null; };
+  // mese scritto: "marzo 2019", "mar 2019"
+  for (const src of [n, t]) {
+    const m = src.match(new RegExp('\\b(' + MESI_RE + ')[a-z]*\\.?\\s*(19[89]\\d|20[0-4]\\d)\\b'));
+    if (m && !g.month) { g.month = MESI.findIndex((x) => x.startsWith(m[1])) + 1; g.year = Number(m[2]); }
+  }
+  // numerico: 2019-03, 03-2019, 201903
+  if (!g.month) {
+    let m = n.match(/\b(19[89]\d|20[0-4]\d)\s*(0?[1-9]|1[0-2])\b/) || n.match(/\b(19[89]\d|20[0-4]\d)(0[1-9]|1[0-2])\b/);
+    if (m) { g.year = Number(m[1]); g.month = Number(m[2]); }
+    else if ((m = n.match(/\b(0?[1-9]|1[0-2])\s*(19[89]\d|20[0-4]\d)\b/))) { g.month = Number(m[1]); g.year = Number(m[2]); }
+    else if ((m = t.match(/\b(0[1-9]|1[0-2])\s*[\/\-.]\s*(19[89]\d|20[0-4]\d)\b/))) { g.month = Number(m[1]); g.year = Number(m[2]); }
+  }
+  if (!g.year) g.year = yr(n) || yr(t);
+  if (g.kind === 'cud') g.month = null;
+  return g;
+}
+let vBulk = null;
+function viewVaultMulti() {
+  if (!vUnlocked()) return viewVaultLock();
+  if (!vBulk) vBulk = { rows: [], busy: '', done: 0 };
+  const Bk = vBulk;
+  const redraw = () => { const y = window.scrollY; render(true); window.scrollTo(0, y); };
+  const pick = () => {
+    const inp = h('input', { type: 'file', accept: 'application/pdf,.pdf,image/*', multiple: true, style: 'display:none' });
+    inp.addEventListener('change', async () => {
+      const fl = [...inp.files]; inp.remove(); if (!fl.length) return;
+      let k = 0;
+      for (const f of fl) {
+        Bk.busy = `Analizzo ${++k}/${fl.length}…`; if (k === 1 || k % 5 === 0) redraw();
+        let text = '';
+        const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+        if (isPdf) { try { text = await pdfText(f, 1); } catch (e) { /* PDF scansionato */ } }
+        const g = vGuess(f.name, text);
+        Bk.rows.push({ file: f, isPdf, name: f.name, kind: g.kind, year: g.year || new Date().getFullYear(), month: g.month || null, sure: !!(g.year && (g.month || g.kind !== 'cedolino')) });
+      }
+      Bk.rows.sort((a, b) => (a.year - b.year) || ((a.month || 0) - (b.month || 0)));
+      Bk.busy = ''; redraw();
+    });
+    document.body.append(inp); inp.click();
+  };
+  const saveAll = async (btn) => {
+    const rows = Bk.rows;
+    if (!rows.length) return;
+    const unsure = rows.filter((r) => r.kind === 'cedolino' && !r.month).length;
+    if (unsure && !confirm(`${unsure} cedolini senza mese. Li salvo comunque (potrai correggerli dopo)?`)) return;
+    btn.disabled = true;
+    try {
+      let i = 0;
+      for (const r of rows) {
+        btn.textContent = `Cifro ${++i}/${rows.length}…`;
+        let blob = r.file, type = 'pdf';
+        if (!r.isPdf) { const c = await compressImage(r.file); blob = c.blob; type = 'jpg'; }
+        const st = await vStoreFile(blob);
+        const item = { id: uid('v'), kind: r.kind, year: Number(r.year) || null, month: r.kind === 'cedolino' ? (Number(r.month) || null) : null,
+          title: '', notes: '', pages: [{ id: st.id, type, name: r.name, size: st.size }], createdAt: now(), updatedAt: now() };
+        V.index.items[item.id] = item;
+        vTouch();
+      }
+      await vSaveIndexLocal();
+      vSeg = rows[0].kind; vBulk = null;
+      location.replace('#/vault');
+      toast(`${rows.length} documenti cifrati: li carico su GitHub (vedi l'avanzamento in alto)`);
+      vSync();
+    } catch (e) { btn.disabled = false; btn.textContent = 'Salva tutti'; alert('Errore: ' + e.message); }
+  };
+  const yNow = new Date().getFullYear();
+  const yearOpts = (v) => Array.from({ length: 30 }, (_, i) => yNow + 1 - i).map((y) => h('option', { value: y, selected: Number(v) === y }, y));
+  return {
+    top: vBack('Carica più documenti'),
+    body: [h('div', { class: 'detail' },
+      h('p', { class: 'help', style: 'margin:0' }, 'Scegli tutti i file insieme (PDF o foto): ognuno diventa un documento. Tipo, anno e mese li propongo dal nome del file e dal testo del PDF: controllali, poi "Salva tutti". Vengono cifrati sul telefono e caricati uno alla volta: puoi lasciare l\'app aperta finché in alto non vedi "Cifrato e salvato".'),
+      h('button', { class: 'btn primary block', onclick: pick }, icon('upload'), Bk.rows.length ? 'Aggiungi altri file' : 'Scegli i file'),
+      Bk.busy ? h('p', { class: 'small' }, Bk.busy) : null,
+      Bk.rows.length ? h('div', { class: 'group-title' }, `${Bk.rows.length} file · ${Bk.rows.filter((r) => !r.sure).length} da controllare`) : null,
+      h('div', { class: 'list' }, Bk.rows.map((r, i) => h('div', { class: 'panel bulk-row' + (r.sure ? '' : ' unsure') },
+        h('div', { class: 'bulk-name' }, icon(r.isPdf ? 'file' : 'image'), h('span', null, r.name),
+          h('button', { class: 'icon-btn plain', 'aria-label': 'Togli', onclick: () => { Bk.rows.splice(i, 1); redraw(); } }, icon('close'))),
+        h('div', { class: 'inline' },
+          h('select', { class: 'input', 'aria-label': 'Tipo', onchange: (e) => { r.kind = e.target.value; r.sure = true; redraw(); } }, VKINDS.map(([k, l]) => h('option', { value: k, selected: r.kind === k }, l))),
+          h('select', { class: 'input', 'aria-label': 'Anno', onchange: (e) => { r.year = Number(e.target.value); r.sure = true; } }, yearOpts(r.year)),
+          r.kind === 'cedolino' ? h('select', { class: 'input', 'aria-label': 'Mese', onchange: (e) => { r.month = Number(e.target.value) || null; r.sure = true; redraw(); } },
+            h('option', { value: '' }, 'Mese?'), MESI.map((m, k) => h('option', { value: k + 1, selected: r.month === k + 1 }, m)), h('option', { value: 13, selected: r.month === 13 }, '13ª / 14ª')) : null)))),
+      Bk.rows.length ? h('button', { class: 'btn primary block', onclick: (e) => saveAll(e.currentTarget) }, icon('lock'), `Salva tutti (${Bk.rows.length}) cifrati`) : null)],
   };
 }
