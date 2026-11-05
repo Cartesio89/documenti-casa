@@ -129,7 +129,9 @@ document.addEventListener('visibilitychange', () => {
 
 async function vUnlock(pass) {
   const meta = lsGet(V.LS.meta, null);
-  const key = await vUnwrap(pass, meta);
+  await vOpenWithKey(await vUnwrap(pass, meta));
+}
+async function vOpenWithKey(key) {
   V.key = key;
   try {
     const t = lsGet(V.LS.tok, null);
@@ -166,6 +168,80 @@ async function vSetup({ owner, repo, token, pass, create }) {
   await vSaveIndexLocal();
   vTouch();
 }
+/* ---------------- sblocco rapido con impronta (passkey + PRF) ----------------
+ * La passkey (salvata nel Gestore password di Google) restituisce un segreto fisso di 32 byte solo dopo l'impronta.
+ * Da quel segreto (HKDF) nasce una seconda chiave che avvolge la stessa DEK: la frase resta valida come riserva.
+ * In vault.json si salvano id della passkey, sale PRF e DEK avvolta: nessuno di questi apre il vault senza la passkey. */
+const vBioSupported = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+const vBioList = () => ((lsGet(V.LS.meta, null) || {}).bio || []);
+async function vBioKek(prfOut) {
+  const base = await crypto.subtle.importKey('raw', prfOut, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: vEnc.encode('documenti-vault-impronta-v1') },
+    base, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']);
+}
+async function vBioGet(entries) {
+  const cred = await navigator.credentials.get({ publicKey: {
+    challenge: rnd(32), rpId: location.hostname, userVerification: 'required', timeout: 60000,
+    allowCredentials: entries.map((e) => ({ type: 'public-key', id: b64ToU8(e.credId) })),
+    extensions: { prf: { evalByCredential: Object.fromEntries(entries.map((e) => [e.credIdUrl, { first: b64ToU8(e.prfSalt) }])) } },
+  } });
+  const res = cred.getClientExtensionResults().prf;
+  const out = res && res.results && res.results.first;
+  if (!out) throw new Error('Questo telefono non restituisce il segreto della passkey (PRF). Usa la frase; se la passkey è in Samsung Pass, rifalla nel Gestore password di Google.');
+  const entry = entries.find((e) => e.credIdUrl === cred.id) || entries[0];
+  return { entry, prf: new Uint8Array(out) };
+}
+const toUrl64 = (b64) => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+async function vBioEnable(pass) {
+  if (!vBioSupported()) throw new Error('Questo browser non supporta le passkey');
+  const meta = lsGet(V.LS.meta, null);
+  const kek = await vKek(pass, meta.salt, meta.iter);
+  const w = b64ToU8(meta.wrapped);
+  let dek;
+  try { dek = await crypto.subtle.unwrapKey('raw', w.slice(12), kek, { name: 'AES-GCM', iv: w.slice(0, 12) }, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']); } catch (e) { throw new Error('Frase sbagliata'); }
+  const prfSalt = rnd(32);
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: rnd(32), rp: { name: 'Vault Documenti casa', id: location.hostname },
+    user: { id: rnd(16), name: 'Vault Documenti casa', displayName: 'Vault Documenti casa' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+    timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } },
+  } });
+  const credId = u8ToB64(new Uint8Array(cred.rawId));
+  const entry = { credId, credIdUrl: cred.id || toUrl64(credId), prfSalt: u8ToB64(prfSalt), label: navigator.userAgent.includes('Android') ? 'Android' : 'Dispositivo', createdAt: now() };
+  let r = cred.getClientExtensionResults().prf;
+  let prf = r && r.results && r.results.first ? new Uint8Array(r.results.first) : null;
+  if (!prf) prf = (await vBioGet([entry])).prf; // alcuni gestori danno il segreto solo al primo uso: chiede l'impronta una seconda volta
+  const kek2 = await vBioKek(prf);
+  const iv = rnd(12);
+  const ct = new Uint8Array(await crypto.subtle.wrapKey('raw', dek, kek2, { name: 'AES-GCM', iv }));
+  const wrapped = new Uint8Array(12 + ct.length); wrapped.set(iv); wrapped.set(ct, 12);
+  entry.wrapped = u8ToB64(wrapped);
+  await vSaveMeta(Object.assign({}, meta, { bio: [...(meta.bio || []), entry] }));
+}
+async function vBioUnlock() {
+  const entries = vBioList();
+  if (!entries.length) throw new Error('Impronta non attivata');
+  const { entry, prf } = await vBioGet(entries);
+  const kek2 = await vBioKek(prf);
+  const w = b64ToU8(entry.wrapped);
+  let key;
+  try { key = await crypto.subtle.unwrapKey('raw', w.slice(12), kek2, { name: 'AES-GCM', iv: w.slice(0, 12) }, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']); }
+  catch (e) { throw new Error('Impronta non valida per questo vault: usa la frase'); }
+  await vOpenWithKey(key);
+}
+async function vSaveMeta(meta) {
+  const sha = await vSha('vault.json');
+  const r = await vPut('vault.json', vEnc.encode(JSON.stringify(meta, null, 1)), sha, 'Vault: impostazioni di accesso');
+  if (!r.ok) throw new Error('Salvataggio su GitHub fallito (' + r.status + ')');
+  lsSet(V.LS.meta, meta);
+}
+async function vRefreshMeta() { // impronte aggiunte da un altro telefono
+  const raw = await vGetRaw('vault.json'); if (!raw) return;
+  const m = JSON.parse(vDec.decode(raw));
+  if (m.wrapped && m.salt) lsSet(V.LS.meta, m);
+}
+
 function vForget() {
   for (const k of Object.values(V.LS)) localStorage.removeItem(k);
   VDB.clear('files').catch(() => {}); VDB.clear('pending').catch(() => {});
@@ -211,6 +287,7 @@ async function vSync() {
     }
     await vPushIndex();
     await vSaveIndexLocal();
+    await vRefreshMeta().catch(() => {});
     V.state = 'ok'; V.error = '';
   } catch (e) { V.state = 'error'; V.error = e.message; }
   finally {
@@ -285,6 +362,7 @@ function passField(id, label, autocomplete, extra) {
     h('input', Object.assign({ class: 'input', id, type: 'password', autocomplete, autocapitalize: 'off', spellcheck: 'false', name: id }, extra || {})));
 }
 function viewVaultLock() {
+  const bio = vBioSupported() && vBioList().length > 0;
   const go2 = async (btn) => {
     const pass = $('#v-pass').value;
     if (!pass) return;
@@ -299,8 +377,13 @@ function viewVaultLock() {
         h('h2', null, 'Vault chiuso'),
         h('p', { class: 'help' }, 'CUD, cedolini e documenti personali, cifrati. Inserisci la frase segreta (la trovi nel password manager).'),
         h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Vault Documenti casa', readonly: true, class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true' }),
-        passField('v-pass', 'Frase segreta', 'current-password', { autofocus: true }),
-        h('button', { class: 'btn primary block', type: 'submit', style: 'margin-top:14px' }, icon('key'), 'Apri')))],
+        bio ? h('button', { class: 'btn primary block', type: 'button', style: 'margin:6px 0 16px', onclick: async (e) => {
+          const b = e.currentTarget; b.disabled = true;
+          try { await vBioUnlock(); render(true); } catch (err) { b.disabled = false; if (err.name !== 'NotAllowedError') toast(err.message); }
+        } }, icon('finger'), 'Sblocca con impronta') : null,
+        bio ? h('p', { class: 'small muted', style: 'margin:0 0 6px' }, 'oppure con la frase') : null,
+        passField('v-pass', 'Frase segreta', 'current-password', bio ? {} : { autofocus: true }),
+        h('button', { class: 'btn block' + (bio ? '' : ' primary'), type: 'submit', style: 'margin-top:14px' }, icon('key'), 'Apri con la frase')))],
   };
 }
 
@@ -474,7 +557,7 @@ function viewVaultSettings() {
       const w = b64ToU8(meta.wrapped);
       let dek;
       try { dek = await crypto.subtle.unwrapKey('raw', w.slice(12), kek, { name: 'AES-GCM', iv: w.slice(0, 12) }, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']); } catch (e) { throw new Error('Frase attuale sbagliata'); }
-      const nm = await vWrap(p1, dek);
+      const nm = Object.assign(await vWrap(p1, dek), meta.bio ? { bio: meta.bio } : {});
       const sha = await vSha('vault.json');
       const r = await vPut('vault.json', vEnc.encode(JSON.stringify(nm, null, 1)), sha, 'Frase cambiata');
       if (!r.ok) throw new Error('Salvataggio fallito (' + r.status + ')');
@@ -490,6 +573,23 @@ function viewVaultSettings() {
         h('p', { class: 'help', style: 'margin:0' }, 'Ogni file, i titoli e le note vengono cifrati su questo telefono (AES-256) prima di andare su GitHub, nel repo ', h('code', null, (vCfg() || {}).repo), '. Lì restano solo dati illeggibili. La chiave nasce dalla tua frase e resta solo in memoria: il vault si chiude dopo 5 minuti di inattività o 1 minuto in background.')),
       h('div', { class: 'panel' }, h('h2', null, 'Nuovo telefono'),
         h('p', { class: 'help', style: 'margin:0' }, 'Apri Documenti casa → Altro → Vault → "Collega vault esistente" e inserisci il ', h('b', null, 'token del vault'), ' e la ', h('b', null, 'frase segreta'), '. Tutto il resto si scarica da GitHub. Tieni entrambi nel password manager.')),
+      h('form', { class: 'panel', onsubmit: async (e) => {
+        e.preventDefault(); const b = e.target.querySelector('button[type=submit]'); b.disabled = true;
+        try { await vBioEnable($('#v-bio-pass').value); toast('Impronta attivata'); render(true); }
+        catch (err) { b.disabled = false; alert(err.name === 'NotAllowedError' ? 'Operazione annullata.' : err.message); }
+      } },
+        h('h2', null, icon('finger'), 'Sblocco con impronta'),
+        !vBioSupported() ? h('p', { class: 'help', style: 'margin:0' }, 'Questo browser non supporta le passkey.')
+          : [h('p', { class: 'help', style: 'margin-top:0' }, vBioList().length ? `Attiva su ${vBioList().length} passkey. La frase resta valida come riserva.` : 'Per l\'uso di tutti i giorni: apri il vault con l\'impronta invece della frase. La frase resta la chiave di riserva: tienila nel password manager.'),
+            vBioList().length ? null : h('p', { class: 'help' }, 'Quando il telefono chiede dove salvare la passkey, scegli ', h('b', null, 'Google (Gestore password)'), ', non Samsung Pass.'),
+            h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Vault Documenti casa', readonly: true, class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true' }),
+            passField('v-bio-pass', 'Frase segreta (per confermare)', 'current-password'),
+            h('div', { class: 'inline', style: 'margin-top:10px' },
+              h('button', { class: 'btn primary', type: 'submit' }, icon('finger'), vBioList().length ? 'Aggiungi un\'altra passkey' : 'Attiva impronta'),
+              vBioList().length ? h('button', { class: 'btn danger', type: 'button', onclick: async () => {
+                if (!confirm('Disattivare lo sblocco con impronta? Resterà solo la frase.')) return;
+                try { const m = lsGet(V.LS.meta, null); delete m.bio; await vSaveMeta(m); toast('Impronta disattivata'); render(true); } catch (err) { alert(err.message); }
+              } }, 'Disattiva') : null)]),
       h('div', { class: 'panel' }, h('h2', null, 'Copia di sicurezza'),
         h('button', { class: 'btn', onclick: (e) => exportZip(e.currentTarget) }, icon('download'), 'Scarica tutto in chiaro (ZIP)')),
       h('form', { class: 'panel', onsubmit: (e) => { e.preventDefault(); changePass(e.target.querySelector('button')); } }, h('h2', null, 'Cambia frase segreta'),
