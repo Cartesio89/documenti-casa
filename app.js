@@ -868,9 +868,9 @@ function viewMore() {
   return {
     top: topBar('Altro'),
     body: [h('div', { class: 'list' },
+      card('vault', 'lock', 'Vault personale', vConfigured() ? (vUnlocked() ? 'Aperto · cedolini, CU e documenti fiscali cifrati' : 'Chiuso · cedolini, CU e documenti fiscali cifrati') : 'Cedolini, CU e documenti fiscali, cifrati con la tua frase segreta'),
       card('mail', 'mail', 'Mail automatica', `${DB.meta.mailbox || 'nessuna casella'} · ${ss.length} mittenti${INBOX.lastRun ? ' · ultimo controllo ' + new Date(INBOX.lastRun).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ' · script non ancora attivo'}`),
       card('calendario', 'cal', 'Calendario', cals.length ? cals.join(' · ') : 'Nessun indirizzo'),
-      card('vault', 'lock', 'Vault personale', vConfigured() ? (vUnlocked() ? 'Aperto · CUD, cedolini e documenti cifrati' : 'Chiuso · CUD, cedolini e documenti cifrati') : 'CUD e cedolini, cifrati con la tua frase segreta'),
       card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
       deletedDocs().length ? card('cestino', 'trash', `Cestino (${deletedDocs().length})`, 'Documenti eliminati: puoi ripristinarli') : null,

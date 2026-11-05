@@ -359,9 +359,9 @@ async function vFileUrl(p) {
 }
 
 /* ---------------- interfaccia */
-const VKINDS = [['cedolino', 'Cedolini'], ['cud', 'CUD / CU'], ['altro', 'Altro']];
+const VKINDS = [['cedolino', 'Cedolini'], ['cud', 'CUD / CU'], ['fiscale', 'Fiscali'], ['altro', 'Altro']];
 const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-const vTitle = (x) => x.title || (x.kind === 'cedolino' ? `Cedolino ${x.month ? MESI[x.month - 1] + ' ' : ''}${x.year || ''}` : x.kind === 'cud' ? `CU ${x.year || ''}` : 'Documento');
+const vTitle = (x) => x.title || (x.kind === 'cedolino' ? `Cedolino ${x.month ? MESI[x.month - 1] + ' ' : ''}${x.year || ''}` : x.kind === 'cud' ? `CU ${x.year || ''}` : x.kind === 'fiscale' ? `Documento fiscale ${x.year || ''}` : 'Documento');
 let vSeg = 'cedolino';
 const vBack = (t) => topBar(t, { back: 'vault', small: true, noSync: true });
 function vStatusPill() {
@@ -381,7 +381,7 @@ function viewVault() {
     segmented(VKINDS.map(([k, l]) => [k, l, all.filter((x) => x.kind === k).length]), vSeg, (k) => { vSeg = k; render(true); }),
     ...years.map((y) => [h('div', { class: 'group-title' }, String(y)),
       h('div', { class: 'list' }, arr.filter((x) => (x.year || '—') === y).map((x) => h('button', { class: 'card-link', onclick: () => go('vdoc/' + x.id) },
-        h('span', { class: 'ic' }, icon(x.kind === 'cud' ? 'file' : 'euro')),
+        h('span', { class: 'ic' }, icon(x.kind === 'cedolino' ? 'euro' : x.kind === 'fiscale' ? 'bank' : 'file')),
         h('span', { class: 't' }, h('b', null, vTitle(x)), h('span', null, `${(x.pages || []).length} file${x.notes ? ' · ' + x.notes.slice(0, 40) : ''}`)),
         h('span', { class: 'chev' }, icon('chev')))))]),
     arr.length ? null : h('div', { class: 'empty' }, 'Nessun documento qui. Aggiungilo con il +.'),
@@ -652,6 +652,7 @@ function vGuess(name, text) {
   const all = n + '\n' + t.slice(0, 4000);
   const g = { kind: 'cedolino', year: null, month: null };
   if (/\bcud\b|\bcu\b|certificazione unica/.test(all)) g.kind = 'cud';
+  else if (/\b730\b|\bf24\b|modello redditi|unico persone|dichiarazione dei redditi|\bimu\b|\btasi\b|agenzia delle entrate|isee|spese mediche|detrazion/.test(all)) g.kind = 'fiscale';
   else if (!/cedolin|busta|paga|retribu|stipend|lul\b|libro unico/.test(all)) g.kind = /\d{4}/.test(n) ? 'cedolino' : 'altro';
   if (/tredicesima|13\s*(ª|a)?\s*mensilit/.test(all)) g.month = 13;
   if (/quattordicesima|14\s*(ª|a)?\s*mensilit/.test(all)) g.month = 13;
