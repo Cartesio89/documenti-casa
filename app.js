@@ -872,7 +872,6 @@ function viewMore() {
       card('calendario', 'cal', 'Calendario', cals.length ? cals.join(' · ') : 'Nessun indirizzo'),
       card('vault', 'lock', 'Vault personale', vConfigured() ? (vUnlocked() ? 'Aperto · CUD, cedolini e documenti cifrati' : 'Chiuso · CUD, cedolini e documenti cifrati') : 'CUD e cedolini, cifrati con la tua frase segreta'),
       card('case', 'home', 'Abitazioni', homes().map((x) => x.name).join(' · ') + (multiHome() ? '' : ' · aggiungi abitazione')),
-      card('cat/lavori', 'hammer', 'Lavori e ristrutturazioni', `${works().length} lavori`),
       card('tag', 'tag', 'Tag', `${tags().length} tag`),
       deletedDocs().length ? card('cestino', 'trash', `Cestino (${deletedDocs().length})`, 'Documenti eliminati: puoi ripristinarli') : null,
       dupCount() ? card('doppioni', 'file', `Possibili doppioni (${dupCount()})`, 'Controlla e decidi cosa tenere') : null,
