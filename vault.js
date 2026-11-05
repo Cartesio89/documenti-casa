@@ -6,7 +6,7 @@
  *  - con la DEK si cifrano: indice (titoli, anni, note…), ogni file, e anche il token GitHub del vault salvato sul telefono
  *  - i nomi dei file sul repo sono casuali: non rivelano nulla
  * Repo: vault.json (sale + DEK avvolta, non segreti), index.enc, f/<id>.enc
- * La chiave resta solo in memoria: il vault si chiude dopo 5 minuti di inattività o 60 s in background.
+ * La chiave resta solo in memoria: il vault si chiude dopo 5 minuti di inattività o 5 minuti in background.
  * Caricato prima di app.js: usa le sue funzioni solo a runtime. */
 'use strict';
 
@@ -137,10 +137,12 @@ function vLock(reason) {
   if (parseRoute().name.startsWith('v')) { if (location.hash !== '#/vault') location.replace('#/vault'); else render(true); }
   if (reason) toast(reason);
 }
-setInterval(() => { if (V.key && now() - V.lastActive > 5 * 60 * 1000) vLock('Vault chiuso per inattività'); }, 15000);
+const vUploading = () => V.busy || (V.upTotal || 0) > 0;
+/* durante un caricamento il vault non si chiude: conta come attività */
+setInterval(() => { if (V.key && vUploading()) vTouch(); else if (V.key && now() - V.lastActive > 5 * 60 * 1000) vLock('Vault chiuso per inattività'); }, 15000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') V.hiddenAt = now();
-  else if (V.key && V.hiddenAt && now() - V.hiddenAt > 60 * 1000) vLock('Vault chiuso: l\'app era in background');
+  else if (V.key && V.hiddenAt && now() - V.hiddenAt > 5 * 60 * 1000 && !vUploading()) vLock('Vault chiuso: l\'app era in background da più di 5 minuti');
 });
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => { if (V.key) vTouch(); }, { passive: true }));
 
@@ -596,7 +598,7 @@ function viewVaultSettings() {
     top: vBack('Impostazioni vault'),
     body: [h('div', { class: 'detail' },
       h('div', { class: 'panel' }, h('h2', null, 'Come funziona'),
-        h('p', { class: 'help', style: 'margin:0' }, 'Ogni file, i titoli e le note vengono cifrati su questo telefono (AES-256) prima di andare su GitHub, nel repo ', h('code', null, (vCfg() || {}).repo), '. Lì restano solo dati illeggibili. La chiave nasce dalla tua frase e resta solo in memoria: il vault si chiude dopo 5 minuti di inattività o 1 minuto in background.')),
+        h('p', { class: 'help', style: 'margin:0' }, 'Ogni file, i titoli e le note vengono cifrati su questo telefono (AES-256) prima di andare su GitHub, nel repo ', h('code', null, (vCfg() || {}).repo), '. Lì restano solo dati illeggibili. La chiave nasce dalla tua frase e resta solo in memoria: il vault si chiude dopo 5 minuti di inattività o 5 minuti in background (mai durante un caricamento).')),
       h('div', { class: 'panel' }, h('h2', null, 'Nuovo telefono'),
         h('p', { class: 'help', style: 'margin:0' }, 'Apri Documenti casa → Altro → Vault → "Collega vault esistente" e inserisci il ', h('b', null, 'token del vault'), ' e la ', h('b', null, 'frase segreta'), '. Tutto il resto si scarica da GitHub. Tieni entrambi nel password manager.')),
       h('form', { class: 'panel', onsubmit: async (e) => {
