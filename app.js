@@ -297,8 +297,9 @@ async function fileBlob(path) {
   const r = await Sync.api('contents/' + encPath(path) + '?ref=' + encodeURIComponent(Sync.cfg().branch || 'main'));
   if (!r.ok) throw new Error('File non trovato (' + r.status + ')');
   const j = await r.json();
-  let b64 = j.encoding === 'base64' ? j.content : '';
-  if (!b64) { const rb = await Sync.api('git/blobs/' + j.sha); if (!rb.ok) throw new Error('File non trovato (' + rb.status + ')'); b64 = (await rb.json()).content; }
+  const rb = await Sync.api('git/blobs/' + j.sha); // solo il blob git restituisce i byte esatti
+  if (!rb.ok) throw new Error('File non trovato (' + rb.status + ')');
+  const b64 = (await rb.json()).content;
   const bin = atob(b64.replace(/\s/g, '')); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   const blob = new Blob([u8], { type: path.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg' });
   IDB.cachePut(path, blob).catch(() => {}); // da ora visibile anche offline

@@ -89,14 +89,14 @@ async function vApi(path, opts = {}, token) {
 }
 /* Lettura byte-esatta. NON si usa il formato "raw" di GitHub: per file piccoli che sembrano testo
    GitHub li converte in UTF-8 e corrompe i dati cifrati (bug trovato sul vault reale il 6/11).
-   Si legge il JSON (contenuto in base64, fino a 1 MB) e, per file più grandi, il blob git (base64). */
+   Anche il campo "content" del JSON è già convertito (verificato): si legge lo sha e poi il blob git, che è esatto. */
 async function vGetRaw(path, token) {
   const r = await vApi('contents/' + path + '?ref=main', {}, token);
   if (r.status === 404) return null;
   if (r.status === 401 || r.status === 403) throw new Error('Token del vault non valido o senza accesso al repo (' + r.status + ')');
   if (!r.ok) throw new Error('Lettura dal vault fallita (' + r.status + ')');
   const j = await r.json();
-  if (j.content && j.encoding === 'base64') return b64ToU8(j.content);
+  // anche il "content" del JSON arriva già convertito: solo l'API dei blob git restituisce i byte esatti
   const rb = await vApi('git/blobs/' + j.sha, {}, token);
   if (!rb.ok) throw new Error('Lettura dal vault fallita (' + rb.status + ')');
   return b64ToU8((await rb.json()).content);
