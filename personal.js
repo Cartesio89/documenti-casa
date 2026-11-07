@@ -65,6 +65,7 @@ function viewDocHome(route) {
           if (first) touchSpace(sel, { pin: await pinHash(pin, null, 150000) });
           else { const t = await pinHash(pin, sel.pin.salt, sel.pin.iter); if (t.hash !== sel.pin.hash) throw new Error('PIN sbagliato'); }
           PS.space = sel.id; pTouch(); lsSet('dc.lastSpace', sel.id);
+          setTimeout(() => prefetchFiles().catch(() => {}), 300);
           location.replace('#/pers'); render(true);
         }, first))],
     };
@@ -94,6 +95,7 @@ function viewDocSpace(sp) {
   return {
     top: [...topBar('Doc · ' + sp.name), null],
     body: [h('div', { class: 'detail' },
+      OFF.busy ? h('p', { class: 'small muted', style: 'margin:0' }, `Salvo i file sul telefono per l'offline: ${OFF.done}/${OFF.total}`) : null,
       h('div', { class: 'list' }, cats.map((c) => {
         const n = all.filter((d) => d.catId === c.id).length;
         return h('button', { class: 'card-link', onclick: () => go('pcat/' + c.id) },
