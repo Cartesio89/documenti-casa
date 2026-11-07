@@ -306,23 +306,6 @@ async function fileBlob(path) {
   IDB.cachePut(path, blob).catch(() => {}); // da ora visibile anche offline
   return blob;
 }
-/* copia locale dei file per vederli anche offline.
-   Doc personali: sempre, per lo spazio aperto. Archivio di casa: solo se attivato (può pesare molto). */
-const OFF = { busy: false, done: 0, total: 0 };
-const isLocal = async (path) => !!((await IDB.get(path).catch(() => null)) || (await IDB.cacheGet(path).catch(() => null)));
-async function prefetchFiles() {
-  if (OFF.busy || !Sync.enabled() || !navigator.onLine || (navigator.connection && navigator.connection.saveData)) return;
-  const paths = [];
-  const sp = typeof curSpace === 'function' ? curSpace() : null;
-  if (sp) for (const d of pdocs(sp.id)) for (const p of d.pages || []) paths.push(p.path);
-  if (lsGet('dc.offlineAll', false)) for (const d of docs()) for (const p of d.pages || []) paths.push(p.path);
-  const todo = [];
-  for (const p of paths) if (!(await isLocal(p))) todo.push(p);
-  if (!todo.length) return;
-  OFF.busy = true; OFF.done = 0; OFF.total = todo.length;
-  try { for (const p of todo) { if (!navigator.onLine) break; await fileBlob(p).catch(() => {}); OFF.done++; } }
-  finally { OFF.busy = false; if (['pers', 'pcat', 'pdoc', 'impostazioni'].includes(parseRoute().name)) render(); }
-}
 async function fileUrl(path) {
   if (fileCache.has(path)) return fileCache.get(path);
   const url = URL.createObjectURL(await fileBlob(path));
@@ -522,7 +505,6 @@ const Sync = {
       if (!ok) throw new Error('Conflitto non risolto, riprovo più tardi');
       lsSet(LS.dirty, false);
       await this.checkInbox();
-      setTimeout(() => prefetchFiles().catch(() => {}), 1500);
       this.last = now(); this.error = '';
       this.setState('idle');
     } catch (e) {
@@ -947,13 +929,6 @@ function viewSettings() {
             h('li', null, 'Permissions → Repository → ', h('b', null, 'Contents: Read and write'), '. Nient\'altro.'),
             h('li', null, 'Salvalo nel password manager: serve su ogni dispositivo, anche per la seconda persona.')),
           h('p', null, 'Il token resta solo su questo dispositivo. Ogni modifica e ogni foto diventano un commit nel repo privato: lo storico è anche il backup.'))),
-      h('div', { class: 'panel' },
-        h('h2', null, 'Disponibili offline'),
-        h('p', { class: 'help', style: 'margin:0 0 8px' }, 'I documenti personali (sezione Doc) e il Vault si scaricano sul telefono da soli, così li vedi anche senza rete. Le foto e i PDF dell\'archivio di casa invece si salvano solo quando li apri, a meno che attivi questa opzione (occupa più spazio).'),
-        h('label', { class: 'toggle' + (lsGet('dc.offlineAll', false) ? ' on' : ''), style: 'cursor:pointer' },
-          h('input', { type: 'checkbox', checked: lsGet('dc.offlineAll', false), onchange: (e) => { lsSet('dc.offlineAll', e.target.checked); render(); if (e.target.checked) prefetchFiles(); } }),
-          'Tieni offline anche tutto l\'archivio di casa'),
-        OFF.busy ? h('p', { class: 'small', style: 'margin:8px 0 0' }, `Scarico per l'offline: ${OFF.done}/${OFF.total}…`) : null),
       h('div', { class: 'panel' },
         h('h2', null, 'Cambio telefono'),
         h('p', { class: 'help', style: 'margin:0 0 6px' }, 'Tutto (documenti, foto, impostazioni, mittenti mail, abitazioni) sta su GitHub. Sul telefono nuovo: apri l\'app, Altro → Sincronizzazione, incolla il token. Vault: Altro → Vault → "Collega vault esistente" con token del vault e frase.'),

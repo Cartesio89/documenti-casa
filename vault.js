@@ -193,7 +193,6 @@ async function vSetup({ owner, repo, token, pass, create }) {
   if (create) await vPushIndex(); else await vPullIndex();
   await vSaveIndexLocal();
   vTouch();
-  setTimeout(vSync, 300); // scarica anche i file per l'offline
 }
 /* ---------------- sblocco rapido con impronta (passkey + PRF) ----------------
  * La passkey (salvata nel Gestore password di Google) restituisce un segreto fisso di 32 byte solo dopo l'impronta.
@@ -324,32 +323,12 @@ async function vSync() {
     await vSaveIndexLocal();
     await vRefreshMeta().catch(() => {});
     V.state = 'ok'; V.error = '';
-    setTimeout(() => vPrefetch().catch(() => {}), 500);
   } catch (e) { V.state = 'error'; V.error = e.message || (e.name === 'OperationError' ? 'decifratura non riuscita (dati letti male da GitHub)' : String(e.name || e)); }
   finally {
     V.busy = false;
     if (parseRoute().name.startsWith('v')) render();
     if (V.again) { V.again = false; setTimeout(vSync, 300); }
   }
-}
-/* tutti i file del vault restano anche sul telefono (cifrati), così si aprono offline */
-const VOFF = { busy: false, done: 0, total: 0 };
-async function vPrefetch() {
-  if (VOFF.busy || !V.key || !navigator.onLine) return;
-  const have = new Set([...(await VDB.keys('files')), ...(await VDB.keys('pending'))]);
-  const todo = [];
-  for (const x of vItems()) for (const p of x.pages || []) if (!have.has(p.id)) todo.push(p.id);
-  if (!todo.length) return;
-  VOFF.busy = true; VOFF.done = 0; VOFF.total = todo.length;
-  try {
-    for (const id of todo) {
-      if (!V.key || !navigator.onLine) break;
-      const ct = await vGetRaw('f/' + id + '.enc').catch(() => null);
-      if (ct) await VDB.put('files', id, ct);
-      VOFF.done++;
-      if (VOFF.done % 5 === 0) { const pill = $('.sync-pill'); if (pill && parseRoute().name.startsWith('v')) pill.replaceWith(vStatusPill()); }
-    }
-  } finally { VOFF.busy = false; if (parseRoute().name.startsWith('v')) render(); }
 }
 async function vSaveItem(item) {
   item.updatedAt = now();
@@ -392,7 +371,7 @@ const vTitle = (x) => x.title || (x.kind === 'id' ? (x.idType || 'Documento d\'i
 let vSeg = 'cedolino';
 const vBack = (t) => topBar(t, { back: 'vault', small: true, noSync: true });
 function vStatusPill() {
-  const t = { ok: VOFF.busy ? `Salvo per l'offline ${VOFF.done}/${VOFF.total}` : 'Cifrato e salvato', saving: V.upTotal ? `Carico ${V.upDone}/${V.upTotal}` : 'Salvo…', error: 'Errore', offline: 'Offline, in attesa', idle: 'Aperto' }[V.state] || 'Aperto';
+  const t = { ok: 'Cifrato e salvato', saving: V.upTotal ? `Carico ${V.upDone}/${V.upTotal}` : 'Salvo…', error: 'Errore', offline: 'Offline, in attesa', idle: 'Aperto' }[V.state] || 'Aperto';
   return h('button', { class: 'sync-pill ' + (V.state === 'ok' ? 'idle' : V.state), title: V.error || '', onclick: () => vLock('Vault chiuso') }, icon('lock'), t);
 }
 
