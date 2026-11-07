@@ -359,9 +359,15 @@ async function vFileUrl(p) {
 }
 
 /* ---------------- interfaccia */
-const VKINDS = [['cedolino', 'Cedolini'], ['cud', 'CUD / CU'], ['fiscale', 'Fiscali'], ['altro', 'Altro']];
+const VKINDS = [['cedolino', 'Cedolini'], ['cud', 'CU'], ['fiscale', 'Fiscali'], ['id', 'ID'], ['altro', 'Altro']];
+const IDTYPES = ['Carta d\'identità', 'Patente', 'Passaporto', 'Tessera sanitaria', 'Altro documento'];
+function vExpiry(x) {
+  if (!x.expiry) return null;
+  const days = Math.round((Date.parse(x.expiry) - Date.parse(todayISO())) / 86400000);
+  return { days, label: days < 0 ? `Scaduto il ${fmtDate(x.expiry, true)}` : days <= 90 ? `Scade tra ${days} giorni (${fmtDate(x.expiry, true)})` : `Scade il ${fmtDate(x.expiry, true)}`, cls: days < 0 ? 'late' : days <= 90 ? 'soon' : '' };
+}
 const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-const vTitle = (x) => x.title || (x.kind === 'cedolino' ? `Cedolino ${x.month ? MESI[x.month - 1] + ' ' : ''}${x.year || ''}` : x.kind === 'cud' ? `CU ${x.year || ''}` : x.kind === 'fiscale' ? `Documento fiscale ${x.year || ''}` : 'Documento');
+const vTitle = (x) => x.title || (x.kind === 'id' ? (x.idType || 'Documento d\'identità') : x.kind === 'cedolino' ? `Cedolino ${x.month ? MESI[x.month - 1] + ' ' : ''}${x.year || ''}` : x.kind === 'cud' ? `CU ${x.year || ''}` : x.kind === 'fiscale' ? `Documento fiscale ${x.year || ''}` : 'Documento');
 let vSeg = 'cedolino';
 const vBack = (t) => topBar(t, { back: 'vault', small: true, noSync: true });
 function vStatusPill() {
@@ -374,15 +380,17 @@ function viewVault() {
   if (!vUnlocked()) return viewVaultLock();
   const all = vItems();
   const arr = all.filter((x) => x.kind === vSeg).sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.month || 0) - (a.month || 0)) || (b.createdAt - a.createdAt));
-  const years = [...new Set(arr.map((x) => x.year || '—'))];
+  const years = vSeg === 'id' ? ['Documenti d\'identità'] : [...new Set(arr.map((x) => x.year || '—'))];
   const body = [
     V.state === 'error' ? h('div', { class: 'banner' }, h('div', null, h('b', null, 'Problema di sincronizzazione: '), V.error, ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); vSync(); } }, 'Riprova'))) : null,
     h('button', { class: 'btn block', style: 'margin-bottom:12px', onclick: () => go('vmulti') }, icon('upload'), 'Carica più documenti insieme'),
     segmented(VKINDS.map(([k, l]) => [k, l, all.filter((x) => x.kind === k).length]), vSeg, (k) => { vSeg = k; render(true); }),
     ...years.map((y) => [h('div', { class: 'group-title' }, String(y)),
-      h('div', { class: 'list' }, arr.filter((x) => (x.year || '—') === y).map((x) => h('button', { class: 'card-link', onclick: () => go('vdoc/' + x.id) },
-        h('span', { class: 'ic' }, icon(x.kind === 'cedolino' ? 'euro' : x.kind === 'fiscale' ? 'bank' : 'file')),
-        h('span', { class: 't' }, h('b', null, vTitle(x)), h('span', null, `${(x.pages || []).length} file${x.notes ? ' · ' + x.notes.slice(0, 40) : ''}`)),
+      h('div', { class: 'list' }, arr.filter((x) => vSeg === 'id' || (x.year || '—') === y).map((x) => h('button', { class: 'card-link', onclick: () => go('vdoc/' + x.id) },
+        h('span', { class: 'ic' }, icon(x.kind === 'cedolino' ? 'euro' : x.kind === 'fiscale' ? 'bank' : x.kind === 'id' ? 'key' : 'file')),
+        h('span', { class: 't' }, h('b', null, vTitle(x)), x.kind === 'id' && vExpiry(x)
+          ? h('span', null, h('span', { class: 'badge ' + vExpiry(x).cls }, vExpiry(x).label), ` · ${(x.pages || []).length} file`)
+          : h('span', null, `${(x.pages || []).length} file${x.notes ? ' · ' + x.notes.slice(0, 40) : ''}`)),
         h('span', { class: 'chev' }, icon('chev')))))]),
     arr.length ? null : h('div', { class: 'empty' }, 'Nessun documento qui. Aggiungilo con il +.'),
     h('div', { class: 'inline', style: 'margin-top:22px' },
@@ -475,7 +483,8 @@ function viewVaultNew() {
     try {
       const pages = [];
       for (const p of D.pages) { const s = await vStoreFile(p.blob); pages.push({ id: s.id, type: p.type, name: p.name || '', size: s.size }); URL.revokeObjectURL(p.url); }
-      const item = { id: uid('v'), kind: D.kind, year: Number(D.year) || null, month: D.kind === 'cedolino' ? Number(D.month) || null : null,
+      if (D.kind === 'id') { D.idType = D.idType || IDTYPES[0]; }
+      const item = { id: uid('v'), kind: D.kind, idType: D.kind === 'id' ? D.idType : undefined, expiry: D.kind === 'id' ? (D.expiry || null) : undefined, year: Number(D.year) || null, month: D.kind === 'cedolino' ? Number(D.month) || null : null,
         title: D.title.trim(), notes: D.notes.trim(), pages, createdAt: now() };
       await vSaveItem(item);
       vSeg = item.kind; vDraft = null;
@@ -489,7 +498,12 @@ function viewVaultNew() {
     body: [h('div', { class: 'detail' },
       segmented(VKINDS, D.kind, (k) => { D.kind = k; redraw(); }),
       h('div', { class: 'panel props' },
-        h('div', { class: 'inline' },
+        D.kind === 'id' ? h('div', { class: 'inline' },
+          h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Tipo'),
+            h('select', { class: 'input', onchange: (e) => { D.idType = e.target.value; } }, IDTYPES.map((t) => h('option', { value: t, selected: (D.idType || IDTYPES[0]) === t }, t)))),
+          h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Scadenza'),
+            h('input', { class: 'input', type: 'date', value: D.expiry || '', onchange: (e) => { D.expiry = e.target.value; } }))) : null,
+        D.kind === 'id' ? null : h('div', { class: 'inline' },
           h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Anno'),
             h('select', { class: 'input', onchange: (e) => { D.year = e.target.value; } }, Array.from({ length: 25 }, (_, i) => yNow + 1 - i).map((y) => h('option', { value: y, selected: Number(D.year) === y }, y)))),
           D.kind === 'cedolino' ? h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Mese'),
@@ -552,6 +566,13 @@ function viewVaultDoc(route) {
         h('div', { class: 'inline', style: 'margin-top:10px' },
           h('button', { class: 'btn', onclick: () => pickFiles(true, false, addMore) }, icon('camera'), 'Aggiungi pagina'),
           h('button', { class: 'btn', onclick: () => pickFiles(false, true, addMore) }, icon('upload'), 'Aggiungi file'))),
+      x.kind === 'id' ? h('div', { class: 'panel props' }, h('div', { class: 'inline' },
+        h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Tipo'),
+          h('select', { class: 'input', onchange: async (e) => { x.idType = e.target.value; await vSaveItem(x); render(true); } }, IDTYPES.map((t) => h('option', { value: t, selected: (x.idType || IDTYPES[0]) === t }, t)))),
+        h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Scadenza'),
+          h('input', { class: 'input', type: 'date', value: x.expiry || '', onchange: async (e) => { x.expiry = e.target.value || null; await vSaveItem(x); render(true); } }))),
+        vExpiry(x) ? h('p', { class: 'small', style: 'margin:8px 0 0' }, h('span', { class: 'badge ' + vExpiry(x).cls }, vExpiry(x).label)) : null) : null,
+      vSecretsPanel(x),
       h('div', { class: 'panel' }, h('div', { class: 'field' }, h('label', null, 'Note'),
         h('textarea', { class: 'input', value: x.notes || '', onchange: async (e) => { x.notes = e.target.value; await vSaveItem(x); } }))),
       h('button', { class: 'btn danger', onclick: async () => {
@@ -652,6 +673,7 @@ function vGuess(name, text) {
   const all = n + '\n' + t.slice(0, 4000);
   const g = { kind: 'cedolino', year: null, month: null };
   if (/\bcud\b|\bcu\b|certificazione unica/.test(all)) g.kind = 'cud';
+  else if (/carta d.?identit|\bcie\b|patente|passaporto|tessera sanitaria/.test(all)) { g.kind = 'id'; g.idType = /patente/.test(all) ? 'Patente' : /passaporto/.test(all) ? 'Passaporto' : /tessera sanitaria/.test(all) ? 'Tessera sanitaria' : 'Carta d\'identità'; }
   else if (/\b730\b|\bf24\b|modello redditi|unico persone|dichiarazione dei redditi|\bimu\b|\btasi\b|agenzia delle entrate|isee|spese mediche|detrazion/.test(all)) g.kind = 'fiscale';
   else if (!/cedolin|busta|paga|retribu|stipend|lul\b|libro unico/.test(all)) g.kind = /\d{4}/.test(n) ? 'cedolino' : 'altro';
   if (/tredicesima|13\s*(ª|a)?\s*mensilit/.test(all)) g.month = 13;
@@ -690,7 +712,7 @@ function viewVaultMulti() {
         const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
         if (isPdf) { try { text = await pdfText(f, 1); } catch (e) { /* PDF scansionato */ } }
         const g = vGuess(f.name, text);
-        Bk.rows.push({ file: f, isPdf, name: f.name, kind: g.kind, year: g.year || new Date().getFullYear(), month: g.month || null, sure: !!(g.year && (g.month || g.kind !== 'cedolino')) });
+        Bk.rows.push({ file: f, isPdf, name: f.name, kind: g.kind, idType: g.idType, year: g.year || new Date().getFullYear(), month: g.month || null, sure: !!(g.year && (g.month || g.kind !== 'cedolino')) });
       }
       Bk.rows.sort((a, b) => (a.year - b.year) || ((a.month || 0) - (b.month || 0)));
       Bk.busy = ''; redraw();
@@ -710,7 +732,7 @@ function viewVaultMulti() {
         let blob = r.file, type = 'pdf';
         if (!r.isPdf) { const c = await compressImage(r.file); blob = c.blob; type = 'jpg'; }
         const st = await vStoreFile(blob);
-        const item = { id: uid('v'), kind: r.kind, year: Number(r.year) || null, month: r.kind === 'cedolino' ? (Number(r.month) || null) : null,
+        const item = { id: uid('v'), kind: r.kind, idType: r.kind === 'id' ? (r.idType || IDTYPES[0]) : undefined, year: Number(r.year) || null, month: r.kind === 'cedolino' ? (Number(r.month) || null) : null,
           title: '', notes: '', pages: [{ id: st.id, type, name: r.name, size: st.size }], createdAt: now(), updatedAt: now() };
         V.index.items[item.id] = item;
         vTouch();
@@ -741,4 +763,31 @@ function viewVaultMulti() {
             h('option', { value: '' }, 'Mese?'), MESI.map((m, k) => h('option', { value: k + 1, selected: r.month === k + 1 }, m)), h('option', { value: 13, selected: r.month === 13 }, '13ª / 14ª')) : null)))),
       Bk.rows.length ? h('button', { class: 'btn primary block', onclick: (e) => saveAll(e.currentTarget) }, icon('lock'), `Salva tutti (${Bk.rows.length}) cifrati`) : null)],
   };
+}
+
+/* ---------------- codici riservati (PIN, PUK…) dentro l'indice cifrato ----------------
+ * Mai mostrati negli elenchi né esportati nello ZIP. Visibili solo a vault aperto, toccando "Mostra",
+ * per 10 secondi. Niente pulsante "copia": gli appunti del telefono possono essere letti da altre app. */
+function vSecretsPanel(x) {
+  const list = x.secrets || [];
+  const save = async () => { x.secrets = list.filter((s) => s.label || s.value); await vSaveItem(x); };
+  const row = (sec, i) => {
+    const val = h('input', { class: 'input secret-input', type: 'password', value: sec.value || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Valore riservato',
+      onchange: async (e) => { sec.value = e.target.value; await save(); toast('Salvato (cifrato)'); } });
+    let timer;
+    return h('div', { class: 'secret-row' },
+      h('input', { class: 'input', value: sec.label || '', placeholder: 'PIN', 'aria-label': 'Nome', onchange: async (e) => { sec.label = e.target.value.trim(); await save(); } }),
+      val,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Mostra o nascondi', 'aria-pressed': 'false', onpointerdown: (e) => e.preventDefault(), onclick: (e) => {
+        const b = e.currentTarget; clearTimeout(timer);
+        const show = val.type === 'password';
+        val.type = show ? 'text' : 'password'; b.setAttribute('aria-pressed', String(show));
+        if (show) timer = setTimeout(() => { val.type = 'password'; b.setAttribute('aria-pressed', 'false'); }, 10000);
+      } }, icon('eye')),
+      h('button', { class: 'icon-btn plain', type: 'button', 'aria-label': 'Elimina', onclick: async () => { if (!confirm('Eliminare questo codice?')) return; list.splice(i, 1); await save(); render(true); } }, icon('trash')));
+  };
+  return h('div', { class: 'panel' }, h('h2', null, icon('key'), 'Codici riservati'),
+    h('p', { class: 'help', style: 'margin-top:0' }, 'Cifrati come il resto del vault. Non compaiono negli elenchi né nello ZIP; si vedono solo qui per 10 secondi toccando l\'occhio.'),
+    list.map(row),
+    h('button', { class: 'btn ghost', type: 'button', onclick: async () => { x.secrets = [...list, { label: x.kind === 'id' && !list.length ? 'PIN' : '', value: '' }]; await vSaveItem(x); render(true); } }, icon('plus'), 'Aggiungi codice'));
 }

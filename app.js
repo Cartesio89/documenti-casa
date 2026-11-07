@@ -69,6 +69,7 @@ const ICONS = {
   scan: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   finger: '<path d="M7 11a5 5 0 0 1 10 0v2"/><path d="M12 11v6"/><path d="M9.5 20c.7-1.5 1-3.2 1-5"/><path d="M14.5 20c.4-1.3.5-2.6.5-4v-1"/><path d="M4.5 9a8 8 0 0 1 15 0"/><path d="M5 14v-1"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
@@ -140,12 +141,12 @@ function emptyDB() {
   return {
     version: 1,
     meta: { updatedAt: 0, calendarEmails: ['martino.cicerani@gmail.com', ''], calendarAuto: true, mailbox: 'martinoselly@gmail.com', mailSenders: DEFAULT_SENDERS },
-    docs: {}, works: {}, tags: {}, mail: {}, homes: {}, dupok: {},
+    docs: {}, works: {}, tags: {}, mail: {}, homes: {}, dupok: {}, spaces: {}, pcats: {}, pdocs: {},
   };
 }
 const MAIN_HOME = { id: 'h_main', name: 'Casa', address: '', order: 0, createdAt: 0, updatedAt: 0 };
 let DB = lsGet(LS.data, null) || emptyDB();
-for (const k of ['docs', 'works', 'tags', 'mail', 'homes', 'dupok']) if (!DB[k]) DB[k] = {};
+for (const k of ['docs', 'works', 'tags', 'mail', 'homes', 'dupok', 'spaces', 'pcats', 'pdocs']) if (!DB[k]) DB[k] = {};
 /* la prima casa ha un id fisso: due dispositivi non ne creano due copie */
 function ensureHome() { if (!DB.homes.h_main) DB.homes.h_main = Object.assign({}, MAIN_HOME); }
 ensureHome();
@@ -234,7 +235,7 @@ function createTag(name) {
 }
 
 /* ---------------- merge: per elemento vince l'ultima modifica */
-const MAPS = ['docs', 'works', 'tags', 'mail', 'homes', 'dupok'];
+const MAPS = ['docs', 'works', 'tags', 'mail', 'homes', 'dupok', 'spaces', 'pcats', 'pdocs'];
 function mergeMaps(a, b) {
   const out = Object.assign({}, a);
   for (const [k, v] of Object.entries(b || {})) {
@@ -301,7 +302,7 @@ async function fileBlob(path) {
   if (!rb.ok) throw new Error('File non trovato (' + rb.status + ')');
   const b64 = (await rb.json()).content;
   const bin = atob(b64.replace(/\s/g, '')); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  const blob = new Blob([u8], { type: path.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg' });
+  const blob = new Blob([u8], { type: (typeof MIME !== 'undefined' && MIME[(path.match(/\.([a-z0-9]+)$/i) || [])[1]]) || (path.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg') });
   IDB.cachePut(path, blob).catch(() => {}); // da ora visibile anche offline
   return blob;
 }
@@ -558,7 +559,7 @@ function importInbox(entries) {
 }
 
 /* ================================================================ routing (tasto indietro = schermata precedente) */
-const ROOTS = ['pagamenti', 'archivio', 'multe', 'altro'];
+const ROOTS = ['pagamenti', 'archivio', 'multe', 'doc', 'altro'];
 function parseRoute() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [path, qs] = raw.split('?');
@@ -594,7 +595,7 @@ document.addEventListener('focusout', () => setTimeout(() => { if (pendingRender
 
 function render(routeChanged) {
   const route = parseRoute();
-  if (!routeChanged && (isEditing() || route.name === 'nuovo' || route.name === 'vnuovo' || route.name === 'vmulti' || !$('#viewer').hidden)) { pendingRender = true; return; }
+  if (!routeChanged && (isEditing() || route.name === 'nuovo' || route.name === 'vnuovo' || route.name === 'vmulti' || route.name === 'pnuovo' || !$('#viewer').hidden)) { pendingRender = true; return; }
   pendingRender = false;
   if (currentRaw !== null && routeChanged) scrollMem[currentRaw] = window.scrollY;
   const sameRoute = currentRaw === route.raw;
@@ -604,6 +605,7 @@ function render(routeChanged) {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
     impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups, cestino: viewTrash,
+    doc: viewDocHome, pcat: viewPCat, pdoc: viewPDoc, pnuovo: viewPNew,
     vault: viewVault, vnuovo: viewVaultNew, vmulti: viewVaultMulti, vdoc: viewVaultDoc, vimpostazioni: viewVaultSettings,
   };
   const fn = views[route.name] || viewPayments;
@@ -620,9 +622,10 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
+  if (['pcat', 'pdoc', 'pnuovo'].includes(route.name)) tab = 'doc';
   if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino', 'vault', 'vnuovo', 'vmulti', 'vdoc', 'vimpostazioni'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
-  const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['altro', 'Altro', 'grid']];
+  const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['doc', 'Doc', 'file'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
     h('button', { 'aria-current': tab === k ? 'page' : null, onclick: () => { if (tab !== k || route.name !== k) go(k); else window.scrollTo({ top: 0, behavior: 'smooth' }); } },
       h('span', { class: 'tab-ic' }, icon(ic), k === 'pagamenti' && unseen ? h('span', { class: 'tab-dot' }, unseen) : null), label))));

@@ -107,7 +107,7 @@ button { cursor: pointer; }
   background: var(--surface); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
-#tabbar .inner { max-width: 680px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: var(--tabbar-h); }
+#tabbar .inner { max-width: 680px; margin: 0 auto; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); height: var(--tabbar-h); }
 #tabbar button {
   border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; font-size: 11.5px; font-weight: 500; color: var(--muted); padding: 0;
@@ -406,3 +406,13 @@ details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
 .bulk-name span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bulk-name svg { width: 16px; height: 16px; flex: none; }
 .bulk-name span { text-align: left; }
+.pin-input { letter-spacing: .5em; font-size: 22px; text-align: center; }
+.secret-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.secret-row .secret-input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; letter-spacing: .08em; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--ink); font: inherit; cursor: pointer; }
+.badge.late { white-space: nowrap; }
+.secret-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto auto; gap: 6px; align-items: center; margin-bottom: 8px; }
+.secret-row .input { max-width: none !important; padding-left: 10px; padding-right: 8px; }
+.secret-row .btn { padding: 0 12px; min-width: 0; }
+#tabbar button { font-size: 12px; }
+.secret-row .secret-input { letter-spacing: .02em; } .secret-row .icon-btn[aria-pressed=true] { background: var(--accent-soft); color: var(--accent-text); }
