@@ -7,6 +7,24 @@
 const PS = { space: null, hiddenAt: 0, lastActive: 0 };
 const spaces = () => Object.values(DB.spaces || {}).filter((x) => !x.deleted).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 const pcats = (sid) => Object.values(DB.pcats || {}).filter((c) => !c.deleted && c.spaceId === sid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.name.localeCompare(b.name, 'it'));
+/* sottocartelle: una categoria con parentId vive dentro un'altra (se il padre sparisce torna in cima) */
+const pParent = (c) => { const p = c && c.parentId && DB.pcats[c.parentId]; return p && !p.deleted ? p : null; };
+const topCats = (sid) => pcats(sid).filter((c) => !pParent(c));
+const childCats = (cid) => Object.values(DB.pcats || {}).filter((c) => !c.deleted && c.parentId === cid).sort((a, b) => (a.order || 0) - (b.order || 0) || a.name.localeCompare(b.name, 'it'));
+const catPath = (c) => { const out = []; let x = c, n = 0; while (x && n++ < 20) { out.unshift(x.name); x = pParent(x); } return out.join(' › '); };
+const catTree = (sid) => { const out = []; const walk = (c, lv) => { out.push({ c, lv }); childCats(c.id).forEach((k) => walk(k, lv + 1)); }; topCats(sid).forEach((c) => walk(c, 0)); return out; };
+const catDescIds = (cid) => { const ids = [cid]; childCats(cid).forEach((k) => ids.push(...catDescIds(k.id))); return ids; };
+function catOptions(sid, sel) { return catTree(sid).map(({ c, lv }) => h('option', { value: c.id, selected: c.id === sel }, '\u00a0\u00a0'.repeat(lv) + (lv ? '└ ' : '') + c.name)); }
+function newPCat(sid, parentId, label) {
+  const n = prompt(label || 'Nome della categoria'); if (!n || !n.trim()) return null;
+  const c = { id: uid('c'), spaceId: sid, parentId: parentId || null, name: n.trim(), order: now(), createdAt: now(), updatedAt: now() };
+  DB.pcats[c.id] = c; return c;
+}
+function catCard(c, all) {
+  const ids = catDescIds(c.id); const n = all.filter((d) => ids.includes(d.catId)).length; const sub = childCats(c.id).length;
+  return h('button', { class: 'card-link', onclick: () => go('pcat/' + c.id) },
+    h('span', { class: 'ic' }, icon('folder')), h('span', { class: 't' }, h('b', null, c.name), h('span', null, (sub ? (sub === 1 ? '1 sottocartella · ' : `${sub} sottocartelle · `) : '') + (n === 1 ? '1 documento' : `${n} documenti`))), h('span', { class: 'chev' }, icon('chev')));
+}
 const pdocs = (sid) => Object.values(DB.pdocs || {}).filter((d) => !d.deleted && d.spaceId === sid);
 const curSpace = () => (PS.space && DB.spaces[PS.space] && !DB.spaces[PS.space].deleted ? DB.spaces[PS.space] : null);
 const MIME = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', txt: 'text/plain', zip: 'application/zip' };
@@ -88,25 +106,18 @@ function viewDocHome(route) {
   };
 }
 function viewDocSpace(sp) {
-  const cats = pcats(sp.id);
+  const cats = topCats(sp.id);
   const all = pdocs(sp.id);
-  const loose = all.filter((d) => !cats.some((c) => c.id === d.catId));
+  const loose = all.filter((d) => !pcats(sp.id).some((c) => c.id === d.catId));
   return {
     top: [...topBar('Doc · ' + sp.name), null],
     body: [h('div', { class: 'detail' },
-      h('div', { class: 'list' }, cats.map((c) => {
-        const n = all.filter((d) => d.catId === c.id).length;
-        return h('button', { class: 'card-link', onclick: () => go('pcat/' + c.id) },
-          h('span', { class: 'ic' }, icon('folder')), h('span', { class: 't' }, h('b', null, c.name), h('span', null, `${n} documenti`)), h('span', { class: 'chev' }, icon('chev')));
-      })),
+      h('div', { class: 'list' }, cats.map((c) => catCard(c, all))),
       loose.length ? [h('div', { class: 'group-title' }, 'Senza categoria'), h('div', { class: 'list' }, loose.map(pDocRow))] : null,
       cats.length || all.length ? null : h('div', { class: 'empty' }, 'Crea una categoria (es. "CV", "Attestati") e aggiungi i documenti con il +.'),
       h('div', { class: 'inline', style: 'margin-top:14px' },
         h('button', { class: 'btn', onclick: () => {
-          const n = prompt('Nome della categoria (es. "Attestati", "CV con portfolio")');
-          if (!n || !n.trim()) return;
-          const c = { id: uid('c'), spaceId: sp.id, name: n.trim(), order: now(), createdAt: now(), updatedAt: now() };
-          DB.pcats[c.id] = c; persist();
+          if (newPCat(sp.id, null, 'Nome della categoria (es. "Attestati", "CV con portfolio")')) persist();
         } }, icon('plus'), 'Nuova categoria'),
         h('button', { class: 'btn', onclick: () => pLock('Spazio chiuso') }, icon('lock'), 'Esci'),
         h('button', { class: 'btn ghost', onclick: async () => {
@@ -131,17 +142,27 @@ function needSpace() { const sp = curSpace(); if (!sp) { setTimeout(() => locati
 function viewPCat(route) {
   const sp = needSpace(); const c = DB.pcats[route.arg];
   if (!sp || !c || c.deleted || c.spaceId !== sp.id) return { top: topBar('Doc', { back: 'pers', small: true }), body: [] };
-  const arr = pdocs(sp.id).filter((d) => d.catId === c.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const all = pdocs(sp.id);
+  const arr = all.filter((d) => d.catId === c.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const kids = childCats(c.id); const par = pParent(c); const back = par ? 'pcat/' + par.id : 'pers';
   return {
-    top: topBar(c.name, { back: 'pers', small: true }),
+    top: topBar(c.name, { back, small: true }),
     body: [h('div', { class: 'detail' },
-      arr.length ? h('div', { class: 'list' }, arr.map(pDocRow)) : h('div', { class: 'empty' }, 'Nessun documento in questa categoria.'),
+      par ? h('p', { class: 'help', style: 'margin:0 0 10px' }, catPath(c)) : null,
+      kids.length ? h('div', { class: 'list' }, kids.map((k) => catCard(k, all))) : null,
+      arr.length ? [kids.length ? h('div', { class: 'group-title' }, 'Documenti') : null, h('div', { class: 'list' }, arr.map(pDocRow))]
+        : kids.length ? null : h('div', { class: 'empty' }, 'Cartella vuota: aggiungi un documento con il + o crea una sottocartella.'),
       h('div', { class: 'inline', style: 'margin-top:14px' },
+        h('button', { class: 'btn', onclick: () => { if (newPCat(sp.id, c.id, 'Nome della sottocartella (es. "Account")')) persist(); } }, icon('plus'), 'Nuova sottocartella'),
         h('button', { class: 'btn ghost', onclick: () => { const n = prompt('Nuovo nome della categoria', c.name); if (n && n.trim()) { c.name = n.trim(); c.updatedAt = now(); persist(); } } }, icon('pen'), 'Rinomina'),
         h('button', { class: 'btn ghost danger', onclick: () => {
-          if (arr.length && !confirm(`La categoria contiene ${arr.length} documenti: restano nello spazio "senza categoria". Elimino la categoria?`)) return;
-          c.deleted = true; c.updatedAt = now(); persist({ render: false }); goBack('pers');
-        } }, icon('trash'), 'Elimina categoria')))],
+          const dest = par ? `"${par.name}"` : '"senza categoria"';
+          if ((arr.length || kids.length) && !confirm(`Contiene ${kids.length} sottocartelle e ${arr.length} documenti: passano in ${dest}. Elimino la cartella?`)) return;
+          const t = now();
+          kids.forEach((k) => { k.parentId = par ? par.id : null; k.updatedAt = t; });
+          arr.forEach((d) => { d.catId = par ? par.id : null; d.updatedAt = t; });
+          c.deleted = true; c.updatedAt = t; persist({ render: false }); goBack(back);
+        } }, icon('trash'), 'Elimina cartella')))],
     fab: fab('Nuovo documento', () => go('pnuovo?c=' + c.id)),
   };
 }
@@ -166,17 +187,17 @@ function pickAny(onFiles) {
 let pDraft = null;
 function viewPNew(route) {
   const sp = needSpace(); if (!sp) return { top: topBar('Doc', { back: 'pers', small: true }), body: [] };
-  if (!pDraft || pDraft.key !== route.q.toString()) pDraft = { key: route.q.toString(), title: '', notes: '', catId: route.q.get('c') || (pcats(sp.id)[0] || {}).id || '', files: [] };
+  if (!pDraft || pDraft.key !== route.q.toString()) pDraft = { key: route.q.toString(), title: '', notes: '', catId: route.q.get('c') || (topCats(sp.id)[0] || {}).id || '', files: [] };
   const D = pDraft;
   const redraw = () => { const y = window.scrollY; render(true); window.scrollTo(0, y); };
   return {
-    top: topBar('Nuovo documento', { back: 'pers', small: true }),
+    top: topBar('Nuovo documento', { back: D.catId && DB.pcats[D.catId] ? 'pcat/' + D.catId : 'pers', small: true }),
     body: [h('div', { class: 'detail' },
       h('textarea', { class: 'title-input', rows: 1, placeholder: 'Titolo (es. CV inglese 2026)', value: D.title, oninput: (e) => { D.title = e.target.value; } }),
       h('div', { class: 'panel props' },
         h('div', { class: 'field' }, h('label', null, 'Categoria'),
-          h('select', { class: 'input', onchange: (e) => { if (e.target.value === '__new') { const n = prompt('Nome della nuova categoria'); if (n && n.trim()) { const c = { id: uid('c'), spaceId: sp.id, name: n.trim(), order: now(), createdAt: now(), updatedAt: now() }; DB.pcats[c.id] = c; persist({ render: false }); D.catId = c.id; } redraw(); } else D.catId = e.target.value; } },
-            h('option', { value: '' }, 'Senza categoria'), pcats(sp.id).map((c) => h('option', { value: c.id, selected: c.id === D.catId }, c.name)), h('option', { value: '__new' }, '+ Nuova categoria…'))),
+          h('select', { class: 'input', onchange: (e) => { if (e.target.value === '__new') { const c = newPCat(sp.id, null, 'Nome della nuova categoria'); if (c) { persist({ render: false }); D.catId = c.id; } redraw(); } else D.catId = e.target.value; } },
+            h('option', { value: '' }, 'Senza categoria'), catOptions(sp.id, D.catId), h('option', { value: '__new' }, '+ Nuova categoria…'))),
         h('div', { class: 'field' }, h('label', null, 'Note'), h('textarea', { class: 'input', value: D.notes, oninput: (e) => { D.notes = e.target.value; } }))),
       h('div', { class: 'panel' }, h('h2', null, 'File', h('span', { class: 'prog' }, D.files.length || '')),
         D.files.length ? h('div', { class: 'list' }, D.files.map((f, i) => h('div', { class: 'proj-row' }, icon('file'), h('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis' }, f.name),
@@ -222,7 +243,7 @@ function viewPDoc(route) {
       h('div', { class: 'panel props' },
         h('div', { class: 'field' }, h('label', null, 'Categoria'),
           h('select', { class: 'input', onchange: (e) => set({ catId: e.target.value || null }, true) },
-            h('option', { value: '' }, 'Senza categoria'), pcats(sp.id).map((c) => h('option', { value: c.id, selected: c.id === d.catId }, c.name)))),
+            h('option', { value: '' }, 'Senza categoria'), catOptions(sp.id, d.catId))),
         h('div', { class: 'field' }, h('label', null, 'Note'), h('textarea', { class: 'input', value: d.notes || '', onchange: (e) => set({ notes: e.target.value }) }))),
       h('button', { class: 'btn danger', onclick: () => { if (!confirm('Eliminare il documento?')) return; set({ deleted: true }); goBack('pers'); toast('Eliminato'); } }, icon('trash'), 'Elimina'))],
   };
