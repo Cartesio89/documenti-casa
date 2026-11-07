@@ -559,7 +559,7 @@ function importInbox(entries) {
 }
 
 /* ================================================================ routing (tasto indietro = schermata precedente) */
-const ROOTS = ['pagamenti', 'archivio', 'multe', 'doc', 'altro'];
+const ROOTS = ['pagamenti', 'archivio', 'multe', 'pers', 'altro'];
 function parseRoute() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [path, qs] = raw.split('?');
@@ -605,7 +605,7 @@ function render(routeChanged) {
     pagamenti: viewPayments, archivio: viewArchive, multe: viewFines, altro: viewMore,
     cat: viewCategory, lavoro: viewWork, doc: viewDoc, nuovo: viewNew,
     impostazioni: viewSettings, calendario: viewCalendar, mail: viewMail, tag: viewTags, case: viewHomes, doppioni: viewDups, cestino: viewTrash,
-    doc: viewDocHome, pcat: viewPCat, pdoc: viewPDoc, pnuovo: viewPNew,
+    pers: viewDocHome, pcat: viewPCat, pdoc: viewPDoc, pnuovo: viewPNew,
     vault: viewVault, vnuovo: viewVaultNew, vmulti: viewVaultMulti, vdoc: viewVaultDoc, vimpostazioni: viewVaultSettings,
   };
   const fn = views[route.name] || viewPayments;
@@ -622,10 +622,10 @@ function render(routeChanged) {
 function renderTabs(route) {
   let tab = ROOTS.includes(route.name) ? route.name : null;
   if (['cat', 'lavoro'].includes(route.name)) tab = 'archivio';
-  if (['pcat', 'pdoc', 'pnuovo'].includes(route.name)) tab = 'doc';
+  if (['pcat', 'pdoc', 'pnuovo'].includes(route.name)) tab = 'pers';
   if (['impostazioni', 'calendario', 'mail', 'tag', 'case', 'doppioni', 'cestino', 'vault', 'vnuovo', 'vmulti', 'vdoc', 'vimpostazioni'].includes(route.name)) tab = 'altro';
   const unseen = docs().filter((d) => d.unseen).length;
-  const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['doc', 'Doc', 'file'], ['altro', 'Altro', 'grid']];
+  const defs = [['pagamenti', 'Pagamenti', 'euro'], ['archivio', 'Archivio', 'box'], ['multe', 'Multe', 'car'], ['pers', 'Doc', 'file'], ['altro', 'Altro', 'grid']];
   $('#tabbar').replaceChildren(h('div', { class: 'inner' }, defs.map(([k, label, ic]) =>
     h('button', { 'aria-current': tab === k ? 'page' : null, onclick: () => { if (tab !== k || route.name !== k) go(k); else window.scrollTo({ top: 0, behavior: 'smooth' }); } },
       h('span', { class: 'tab-ic' }, icon(ic), k === 'pagamenti' && unseen ? h('span', { class: 'tab-dot' }, unseen) : null), label))));

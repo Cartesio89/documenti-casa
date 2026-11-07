@@ -13,7 +13,7 @@ const MIME = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', pn
 const extOf = (name) => { const m = String(name || '').toLowerCase().match(/\.([a-z0-9]{1,5})$/); return m ? m[1] : 'bin'; };
 
 function pTouch() { PS.lastActive = now(); }
-function pLock(msg) { if (!PS.space) return; PS.space = null; if (['doc', 'pcat', 'pdoc', 'pnuovo'].includes(parseRoute().name)) { location.replace('#/doc'); render(true); } if (msg) toast(msg); }
+function pLock(msg) { if (!PS.space) return; PS.space = null; if (['pers', 'pcat', 'pdoc', 'pnuovo'].includes(parseRoute().name)) { location.replace('#/pers'); render(true); } if (msg) toast(msg); }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') PS.hiddenAt = now();
   else if (PS.space && PS.hiddenAt && now() - PS.hiddenAt > 5 * 60 * 1000) pLock('Spazio Doc chiuso: l\'app era in background');
@@ -58,14 +58,14 @@ function viewDocHome(route) {
   if (sel && !sel.deleted) {
     const first = !sel.pin;
     return {
-      top: topBar('Doc · ' + sel.name, { back: 'doc', small: true }),
+      top: topBar('Doc · ' + sel.name, { back: 'pers', small: true }),
       body: [h('div', { class: 'detail' }, pinPanel(first ? 'Scegli il tuo PIN' : 'Inserisci il PIN',
         first ? 'Primo accesso: scegli un PIN di 4 o 6 cifre solo tuo. Servirà ogni volta per aprire questo spazio.' : null,
         async (pin) => {
           if (first) touchSpace(sel, { pin: await pinHash(pin, null, 150000) });
           else { const t = await pinHash(pin, sel.pin.salt, sel.pin.iter); if (t.hash !== sel.pin.hash) throw new Error('PIN sbagliato'); }
           PS.space = sel.id; pTouch(); lsSet('dc.lastSpace', sel.id);
-          location.replace('#/doc'); render(true);
+          location.replace('#/pers'); render(true);
         }, first))],
     };
   }
@@ -75,7 +75,7 @@ function viewDocHome(route) {
     top: topBar('Doc'),
     body: [h('div', { class: 'detail' },
       h('p', { class: 'help', style: 'margin:0' }, 'Documenti personali a portata di mano (CV, attestati…). Ogni persona ha il suo spazio con il suo PIN. Per documenti d\'identità e dati riservati usa il Vault.'),
-      list.length ? h('div', { class: 'list' }, list.map((x) => h('button', { class: 'card-link', onclick: () => go('doc?s=' + x.id) },
+      list.length ? h('div', { class: 'list' }, list.map((x) => h('button', { class: 'card-link', onclick: () => go('pers?s=' + x.id) },
         h('span', { class: 'ic' }, icon(x.pin ? 'key' : 'plus')),
         h('span', { class: 't' }, h('b', null, x.name), h('span', null, x.pin ? `${pdocs(x.id).length} documenti · PIN` : 'Primo accesso: scegli il PIN')),
         h('span', { class: 'chev' }, icon('chev'))))) : null,
@@ -83,7 +83,7 @@ function viewDocHome(route) {
         const n = prompt('Nome del nuovo spazio (es. il tuo nome)');
         if (!n || !n.trim()) return;
         const x = { id: uid('s'), name: n.trim(), pin: null, createdAt: now(), updatedAt: now() };
-        DB.spaces[x.id] = x; persist({ render: false }); go('doc?s=' + x.id);
+        DB.spaces[x.id] = x; persist({ render: false }); go('pers?s=' + x.id);
       } }, icon('plus'), 'Crea uno spazio'))],
   };
 }
@@ -127,20 +127,20 @@ function pDocRow(d) {
       h('span', null, files.map((p) => (p.type || '').toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(' · ') + ` · ${files.length} file`)),
     h('span', { class: 'chev' }, icon('chev')));
 }
-function needSpace() { const sp = curSpace(); if (!sp) { setTimeout(() => location.replace('#/doc'), 0); } return sp; }
+function needSpace() { const sp = curSpace(); if (!sp) { setTimeout(() => location.replace('#/pers'), 0); } return sp; }
 function viewPCat(route) {
   const sp = needSpace(); const c = DB.pcats[route.arg];
-  if (!sp || !c || c.deleted || c.spaceId !== sp.id) return { top: topBar('Doc', { back: 'doc', small: true }), body: [] };
+  if (!sp || !c || c.deleted || c.spaceId !== sp.id) return { top: topBar('Doc', { back: 'pers', small: true }), body: [] };
   const arr = pdocs(sp.id).filter((d) => d.catId === c.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   return {
-    top: topBar(c.name, { back: 'doc', small: true }),
+    top: topBar(c.name, { back: 'pers', small: true }),
     body: [h('div', { class: 'detail' },
       arr.length ? h('div', { class: 'list' }, arr.map(pDocRow)) : h('div', { class: 'empty' }, 'Nessun documento in questa categoria.'),
       h('div', { class: 'inline', style: 'margin-top:14px' },
         h('button', { class: 'btn ghost', onclick: () => { const n = prompt('Nuovo nome della categoria', c.name); if (n && n.trim()) { c.name = n.trim(); c.updatedAt = now(); persist(); } } }, icon('pen'), 'Rinomina'),
         h('button', { class: 'btn ghost danger', onclick: () => {
           if (arr.length && !confirm(`La categoria contiene ${arr.length} documenti: restano nello spazio "senza categoria". Elimino la categoria?`)) return;
-          c.deleted = true; c.updatedAt = now(); persist({ render: false }); goBack('doc');
+          c.deleted = true; c.updatedAt = now(); persist({ render: false }); goBack('pers');
         } }, icon('trash'), 'Elimina categoria')))],
     fab: fab('Nuovo documento', () => go('pnuovo?c=' + c.id)),
   };
@@ -165,12 +165,12 @@ function pickAny(onFiles) {
 }
 let pDraft = null;
 function viewPNew(route) {
-  const sp = needSpace(); if (!sp) return { top: topBar('Doc', { back: 'doc', small: true }), body: [] };
+  const sp = needSpace(); if (!sp) return { top: topBar('Doc', { back: 'pers', small: true }), body: [] };
   if (!pDraft || pDraft.key !== route.q.toString()) pDraft = { key: route.q.toString(), title: '', notes: '', catId: route.q.get('c') || (pcats(sp.id)[0] || {}).id || '', files: [] };
   const D = pDraft;
   const redraw = () => { const y = window.scrollY; render(true); window.scrollTo(0, y); };
   return {
-    top: topBar('Nuovo documento', { back: 'doc', small: true }),
+    top: topBar('Nuovo documento', { back: 'pers', small: true }),
     body: [h('div', { class: 'detail' },
       h('textarea', { class: 'title-input', rows: 1, placeholder: 'Titolo (es. CV inglese 2026)', value: D.title, oninput: (e) => { D.title = e.target.value; } }),
       h('div', { class: 'panel props' },
@@ -205,10 +205,10 @@ async function pOpenFile(p) {
 }
 function viewPDoc(route) {
   const sp = needSpace(); const d = DB.pdocs[route.arg];
-  if (!sp || !d || d.deleted || d.spaceId !== sp.id) return { top: topBar('Doc', { back: 'doc', small: true }), body: [h('div', { class: 'empty' }, 'Documento non trovato.')] };
+  if (!sp || !d || d.deleted || d.spaceId !== sp.id) return { top: topBar('Doc', { back: 'pers', small: true }), body: [h('div', { class: 'empty' }, 'Documento non trovato.')] };
   const set = (patch, r) => { Object.assign(d, patch, { updatedAt: now() }); persist({ render: !!r }); };
   return {
-    top: topBar((DB.pcats[d.catId] || {}).name || 'Documento', { back: d.catId ? 'pcat/' + d.catId : 'doc', small: true }),
+    top: topBar((DB.pcats[d.catId] || {}).name || 'Documento', { back: d.catId ? 'pcat/' + d.catId : 'pers', small: true }),
     body: [h('div', { class: 'detail' },
       h('textarea', { class: 'title-input', rows: 1, value: d.title, onchange: (e) => set({ title: e.target.value.trim() || d.title }) }),
       h('div', { class: 'panel' }, h('h2', null, 'File', h('span', { class: 'prog' }, (d.pages || []).length)),
@@ -224,6 +224,6 @@ function viewPDoc(route) {
           h('select', { class: 'input', onchange: (e) => set({ catId: e.target.value || null }, true) },
             h('option', { value: '' }, 'Senza categoria'), pcats(sp.id).map((c) => h('option', { value: c.id, selected: c.id === d.catId }, c.name)))),
         h('div', { class: 'field' }, h('label', null, 'Note'), h('textarea', { class: 'input', value: d.notes || '', onchange: (e) => set({ notes: e.target.value }) }))),
-      h('button', { class: 'btn danger', onclick: () => { if (!confirm('Eliminare il documento?')) return; set({ deleted: true }); goBack('doc'); toast('Eliminato'); } }, icon('trash'), 'Elimina'))],
+      h('button', { class: 'btn danger', onclick: () => { if (!confirm('Eliminare il documento?')) return; set({ deleted: true }); goBack('pers'); toast('Eliminato'); } }, icon('trash'), 'Elimina'))],
   };
 }
