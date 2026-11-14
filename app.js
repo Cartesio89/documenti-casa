@@ -204,6 +204,15 @@ function newDoc(fields) {
   DB.docs[id] = d;
   return d;
 }
+/* eliminazioni: sempre doppia conferma */
+function confirm2(first, second) {
+  return confirm(first) && confirm(second || 'Seconda conferma: elimino davvero?');
+}
+function askDeleteDoc(d) {
+  const n = (d.pages || []).length;
+  return confirm2(`Eliminare il documento "${d.title || 'senza titolo'}"${n ? ` con ${n} file` : ''}?`,
+    'Seconda conferma: elimino il documento? (Resta recuperabile da Altro › Cestino)');
+}
 function deleteDoc(id) {
   const prev = JSON.parse(JSON.stringify(DB.docs[id]));
   updateDoc(id, { deleted: true }, { render: false });
@@ -1086,7 +1095,7 @@ function viewDups() {
           h('button', { class: 'card-link', onclick: () => go('doc/' + x.id) },
             h('span', { class: 't' }, h('b', null, x.title), h('span', null, line(x))),
             h('span', { class: 'chev' }, icon('chev'))),
-          h('button', { class: 'btn ghost danger', onclick: () => { deleteDoc(x.id); render(); } }, icon('trash'), 'Elimina questo'))),
+          h('button', { class: 'btn ghost danger', onclick: () => { if (!askDeleteDoc(x)) return; deleteDoc(x.id); render(); } }, icon('trash'), 'Elimina questo'))),
         h('button', { class: 'btn', onclick: () => markNotDup(a.id, b.id) }, 'Non sono doppioni'))) : h('div', { class: 'empty' }, 'Nessun doppione sospetto.'))],
   };
 }
@@ -1409,7 +1418,7 @@ function viewNew(route) {
 }
 
 /* ---------------- Visualizzatore pagine */
-async function openViewer(d, index) {
+async function openViewer(d, index, onDelete) {
   const v = $('#viewer');
   const pages = d.pages || [];
   let i = index;
@@ -1417,6 +1426,7 @@ async function openViewer(d, index) {
     const p = pages[i];
     v.replaceChildren(...[h('div', { class: 'viewer-bar' },
       h('span', null, `${i + 1} / ${pages.length}`),
+      onDelete ? h('button', { class: 'icon-btn plain', 'aria-label': 'Elimina questo file', style: 'margin-left:auto', onclick: () => { if (onDelete(i)) close(); } }, icon('trash')) : null,
       h('button', { class: 'icon-btn plain', 'aria-label': 'Chiudi', onclick: close }, icon('close'))),
     h('div', { class: 'viewer-body' }, h('p', { class: 'muted' }, 'Carico…')),
     pages.length > 1 ? h('div', { class: 'viewer-nav' },
@@ -1529,7 +1539,7 @@ function viewDoc(route) {
     }
   };
   const thumbs = h('div', { class: 'pages' }, (d.pages || []).map((p, i) => {
-    const cell = h('button', { class: 'page', onclick: () => openViewer(d, i), 'aria-label': 'Apri pagina ' + (i + 1) },
+    const cell = h('button', { class: 'page', onclick: () => openViewer(d, i, removePage), 'aria-label': 'Apri pagina ' + (i + 1) },
       p.type === 'pdf' ? h('div', { class: 'pdf-thumb' }, icon('file'), h('span', null, p.name || 'PDF')) : h('div', { class: 'thumb-loading' }),
       h('span', { class: 'page-n' }, i + 1));
     if (p.type !== 'pdf') fileUrl(p.path).then((u) => { const l = $('.thumb-loading', cell); if (l) l.replaceWith(h('img', { src: u, alt: '' })); })
@@ -1537,8 +1547,10 @@ function viewDoc(route) {
     return cell;
   }));
   const removePage = (i) => {
-    if (!confirm(`Togliere la pagina ${i + 1} dal documento? (Il file resta nello storico del repo.)`)) return;
-    set({ pages: d.pages.filter((_, k) => k !== i) }, true);
+    const p = d.pages[i]; const nm = p.name || (p.type === 'pdf' ? 'PDF' : 'foto');
+    if (!confirm2(`Eliminare il file ${i + 1} (${nm}) da "${d.title || 'questo documento'}"?`,
+      'Seconda conferma: elimino il file? Dall\'app non si potrà recuperare.')) return false;
+    set({ pages: d.pages.filter((_, k) => k !== i) }, true); toast('File eliminato'); return true;
   };
   const ocrExisting = async (btn) => {
     const imgs = (d.pages || []).slice(0, 4);
@@ -1587,7 +1599,7 @@ function viewDoc(route) {
         h('button', { class: 'btn', onclick: () => pickFiles(true, false, addPages) }, icon('camera'), 'Aggiungi pagina'),
         h('button', { class: 'btn', onclick: () => pickFiles(false, true, addPages) }, icon('upload'), 'Aggiungi file'),
         (d.pages || []).some((p) => p.type !== 'pdf') ? h('button', { class: 'btn', onclick: () => exportPdf(d, true).catch((e) => alert('PDF non riuscito: ' + e.message)) }, icon('share'), 'PDF / condividi') : null),
-      (d.pages || []).length ? h('details', { class: 'small', style: 'margin-top:10px' }, h('summary', null, 'Gestisci pagine'),
+      (d.pages || []).length ? h('details', { class: 'small', style: 'margin-top:10px' }, h('summary', null, 'Elimina o riordina file'),
         h('div', { class: 'list', style: 'margin-top:8px' }, d.pages.map((p, i) => h('div', { class: 'proj-row' },
           h('span', { style: 'flex:1' }, `Pagina ${i + 1}${p.name ? ' · ' + p.name : ''}${p.size ? ' · ' + Math.round(p.size / 1024) + ' KB' : ''}`),
           i > 0 ? h('button', { class: 'icon-btn plain', 'aria-label': 'Sposta prima', onclick: () => { const a = [...d.pages]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; set({ pages: a }, true); } }, icon('left')) : null,
@@ -1601,7 +1613,7 @@ function viewDoc(route) {
           h('span', { class: 'chev' }, icon('chev'))),
         h('div', { class: 'inline' },
           h('button', { class: 'btn', onclick: () => markNotDup(d.id, o.id) }, 'Non è un doppione'),
-          h('button', { class: 'btn danger', onclick: () => { deleteDoc(id); goBack('pagamenti'); } }, icon('trash'), 'Elimina questo'))); })) : null,
+          h('button', { class: 'btn danger', onclick: () => { if (!askDeleteDoc(d)) return; deleteDoc(id); goBack('pagamenti'); } }, icon('trash'), 'Elimina questo'))); })) : null,
     mailPanel,
     h('div', { class: 'panel props' },
       segmented([['casa', 'Documento'], ['multe', 'Multa']], d.section, (k) => set({ section: k, category: k === 'multe' ? 'multe' : (d.category === 'multe' ? 'altro' : d.category) }, true)),
@@ -1621,7 +1633,7 @@ function viewDoc(route) {
       h('div', { class: 'field' }, h('label', { for: 'd-notes' }, 'Note'),
         h('textarea', { class: 'input', id: 'd-notes', value: d.notes || '', placeholder: 'Note', onchange: (e) => set({ notes: e.target.value }) }))),
     d.ocrText ? h('details', { class: 'panel small' }, h('summary', null, 'Testo letto dalla foto'), h('p', { class: 'notes-view small muted' }, d.ocrText)) : null,
-    h('button', { class: 'btn danger', onclick: () => { deleteDoc(id); goBack(isMulte ? 'multe' : 'pagamenti'); } }, icon('trash'), 'Elimina documento'),
+    h('button', { class: 'btn danger', onclick: () => { if (!askDeleteDoc(d)) return; deleteDoc(id); goBack(isMulte ? 'multe' : 'pagamenti'); } }, icon('trash'), 'Elimina documento'),
     h('p', { class: 'footer-meta' }, `Creato il ${new Date(d.createdAt).toLocaleDateString('it-IT')}${d.source === 'mail' ? ' dalla mail' : ''}`),
   )];
   return { top: topBar(isMulte ? 'Multa' : (c ? c.name : 'Documento'), { back: isMulte ? 'multe' : 'pagamenti', small: true }), body,

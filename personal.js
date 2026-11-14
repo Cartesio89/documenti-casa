@@ -237,7 +237,7 @@ function viewPDoc(route) {
           h('span', { class: 'badge lbl', style: '--c:#2F4BD8' }, (p.type || '').toUpperCase()),
           h('button', { class: 'link-btn', style: 'flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', onclick: () => pOpenFile(p) }, p.name || 'file'),
           h('button', { class: 'icon-btn plain', 'aria-label': 'Apri o scarica', onclick: () => pOpenFile(p) }, icon(p.type === 'jpg' || p.type === 'pdf' ? 'ext' : 'download')),
-          h('button', { class: 'icon-btn plain', 'aria-label': 'Togli', onclick: () => { if (confirm('Togliere questo file dal documento?')) set({ pages: d.pages.filter((_, k) => k !== i) }, true); } }, icon('trash'))))),
+          h('button', { class: 'icon-btn plain', 'aria-label': 'Togli', onclick: () => { if (confirm2(`Eliminare il file "${p.name || 'file'}" da "${d.title || 'questo documento'}"?`, 'Seconda conferma: elimino il file? Dall\'app non si potrà recuperare.')) { set({ pages: d.pages.filter((_, k) => k !== i) }, true); toast('File eliminato'); } } }, icon('trash'))))),
         h('div', { class: 'inline', style: 'margin-top:10px' },
           h('button', { class: 'btn', onclick: () => pickAny(async (fl) => { const st = await pStoreFiles(d, fl, (d.pages || []).length); set({ pages: [...(d.pages || []), ...st] }, true); }) }, icon('upload'), 'Aggiungi file'))),
       h('div', { class: 'panel props' },
@@ -245,6 +245,6 @@ function viewPDoc(route) {
           h('select', { class: 'input', onchange: (e) => set({ catId: e.target.value || null }, true) },
             h('option', { value: '' }, 'Senza categoria'), catOptions(sp.id, d.catId))),
         h('div', { class: 'field' }, h('label', null, 'Note'), h('textarea', { class: 'input', value: d.notes || '', onchange: (e) => set({ notes: e.target.value }) }))),
-      h('button', { class: 'btn danger', onclick: () => { if (!confirm('Eliminare il documento?')) return; set({ deleted: true }); goBack('pers'); toast('Eliminato'); } }, icon('trash'), 'Elimina'))],
+      h('button', { class: 'btn danger', onclick: () => { if (!confirm2(`Eliminare il documento "${d.title || 'senza titolo'}"${(d.pages || []).length ? ` con ${d.pages.length} file` : ''}?`, 'Seconda conferma: elimino il documento? Dall\'app non si potrà recuperare.')) return; set({ deleted: true }); goBack('pers'); toast('Eliminato'); } }, icon('trash'), 'Elimina'))],
   };
 }

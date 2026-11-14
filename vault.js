@@ -578,13 +578,15 @@ function viewVaultNew() {
   };
 }
 
-function vOpenFile(x, i) {
+function vOpenFile(x, i, onDelete) {
   const v = $('#viewer'); const pages = x.pages || [];
   v.dataset.vault = '1';
   const close = () => { v.hidden = true; v.replaceChildren(); delete v.dataset.vault; };
   const show = async () => {
     const p = pages[i];
-    v.replaceChildren(...[h('div', { class: 'viewer-bar' }, h('span', null, `${i + 1} / ${pages.length}`), h('button', { class: 'icon-btn plain', 'aria-label': 'Chiudi', onclick: close }, icon('close'))),
+    v.replaceChildren(...[h('div', { class: 'viewer-bar' }, h('span', null, `${i + 1} / ${pages.length}`),
+      onDelete ? h('button', { class: 'icon-btn plain', 'aria-label': 'Elimina questo file', style: 'margin-left:auto', onclick: async () => { if (await onDelete(i)) close(); } }, icon('trash')) : null,
+      h('button', { class: 'icon-btn plain', 'aria-label': 'Chiudi', onclick: close }, icon('close'))),
       h('div', { class: 'viewer-body' }, h('p', { class: 'muted' }, 'Decifro…')),
       pages.length > 1 ? h('div', { class: 'viewer-nav' },
         h('button', { class: 'icon-btn', disabled: i === 0, onclick: () => { i--; show(); } }, icon('left')),
@@ -602,8 +604,13 @@ function viewVaultDoc(route) {
   if (!vUnlocked()) return viewVaultLock();
   const x = V.index.items[route.arg];
   if (!x || x.deleted) return { top: vBack('Non trovato'), body: [h('div', { class: 'empty' }, 'Documento non trovato.')] };
+  const removeFile = async (i) => {
+    const p = x.pages[i]; const nm = p.name || (p.type === 'pdf' ? 'PDF' : 'foto');
+    if (!confirm2(`Eliminare il file ${i + 1} (${nm}) da "${vTitle(x)}"?`, 'Seconda conferma: elimino il file? Dall\'app non si potrà recuperare.')) return false;
+    x.pages = x.pages.filter((_, k) => k !== i); await vSaveItem(x); render(true); toast('File eliminato'); return true;
+  };
   const thumbs = h('div', { class: 'pages' }, (x.pages || []).map((p, i) => {
-    const cell = h('button', { class: 'page', onclick: () => vOpenFile(x, i) }, p.type === 'pdf' ? h('div', { class: 'pdf-thumb' }, icon('file'), h('span', null, p.name || 'PDF')) : h('div', { class: 'thumb-loading' }), h('span', { class: 'page-n' }, i + 1));
+    const cell = h('button', { class: 'page', onclick: () => vOpenFile(x, i, removeFile) }, p.type === 'pdf' ? h('div', { class: 'pdf-thumb' }, icon('file'), h('span', null, p.name || 'PDF')) : h('div', { class: 'thumb-loading' }), h('span', { class: 'page-n' }, i + 1));
     if (p.type !== 'pdf') vFileUrl(p).then((u) => { const l = $('.thumb-loading', cell); if (l) l.replaceWith(h('img', { src: u, alt: '' })); }).catch(() => { const l = $('.thumb-loading', cell); if (l) l.textContent = '!'; });
     return cell;
   }));
@@ -619,7 +626,12 @@ function viewVaultDoc(route) {
       h('div', { class: 'panel' }, h('h2', null, 'File', h('span', { class: 'prog' }, (x.pages || []).length)), thumbs,
         h('div', { class: 'inline', style: 'margin-top:10px' },
           h('button', { class: 'btn', onclick: () => pickFiles(true, false, addMore) }, icon('camera'), 'Aggiungi pagina'),
-          h('button', { class: 'btn', onclick: () => pickFiles(false, true, addMore) }, icon('upload'), 'Aggiungi file'))),
+          h('button', { class: 'btn', onclick: () => pickFiles(false, true, addMore) }, icon('upload'), 'Aggiungi file')),
+        (x.pages || []).length ? h('details', { class: 'small', style: 'margin-top:10px' }, h('summary', null, 'Elimina o riordina file'),
+          h('div', { class: 'list', style: 'margin-top:8px' }, x.pages.map((p, i) => h('div', { class: 'proj-row' },
+            h('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis' }, `File ${i + 1}${p.name ? ' · ' + p.name : ''}${p.size ? ' · ' + Math.round(p.size / 1024) + ' KB' : ''}`),
+            i > 0 ? h('button', { class: 'icon-btn plain', 'aria-label': 'Sposta prima', onclick: async () => { const a = [...x.pages]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; x.pages = a; await vSaveItem(x); render(true); } }, icon('left')) : null,
+            h('button', { class: 'icon-btn plain', 'aria-label': 'Elimina file', onclick: () => removeFile(i) }, icon('trash')))))) : null),
       x.kind === 'id' ? h('div', { class: 'panel props' }, h('div', { class: 'inline' },
         h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Tipo'),
           h('select', { class: 'input', onchange: async (e) => { x.idType = e.target.value; await vSaveItem(x); render(true); } }, IDTYPES.map((t) => h('option', { value: t, selected: (x.idType || IDTYPES[0]) === t }, t)))),
@@ -633,7 +645,7 @@ function viewVaultDoc(route) {
       h('div', { class: 'panel' }, h('div', { class: 'field' }, h('label', null, 'Note'),
         h('textarea', { class: 'input', value: x.notes || '', onchange: async (e) => { x.notes = e.target.value; await vSaveItem(x); } }))),
       h('button', { class: 'btn danger', onclick: async () => {
-        if (!confirm('Spostare nel cestino del vault?')) return;
+        if (!confirm2(`Eliminare "${vTitle(x)}"${(x.pages || []).length ? ` con ${x.pages.length} file` : ''}?`, 'Seconda conferma: lo sposto nel cestino del vault? (Recuperabile da Impostazioni vault)')) return;
         x.deleted = true; await vSaveItem(x); goBack('vault'); toast('Spostato nel cestino del vault');
       } }, icon('trash'), 'Elimina'))],
   };
