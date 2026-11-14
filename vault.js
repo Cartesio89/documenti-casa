@@ -282,18 +282,20 @@ function vMerge(a, b) {
 }
 async function vPullIndex() {
   const raw = await vGetRaw('index.enc');
-  if (raw) { const remote = await vDecJson(raw); V.index.items = vMerge(V.index.items, remote.items || {}); }
+  if (raw) vMergeIndex(await vDecJson(raw));
 }
-const vSig = (items) => Object.entries(items || {}).map(([k, v]) => k + ':' + (v.updatedAt || 0)).sort().join('|');
+const V_MAPS = ['items', 'cats', 'tags']; // categorie e tag di "Altro" stanno nell'indice cifrato, mai in chiaro
+function vMergeIndex(remote) { for (const m of V_MAPS) V.index[m] = vMerge(V.index[m] || {}, (remote && remote[m]) || {}); }
+const vSig = (idx) => V_MAPS.map((m) => Object.entries((idx && idx[m]) || {}).map(([k, v]) => m + k + ':' + (v.updatedAt || 0)).sort().join('|')).join('#');
 async function vPushIndex() {
   for (let i = 0; i < 4; i++) {
     const sha = await vSha('index.enc');
     let remoteSig = null;
     if (sha) {
       const raw = await vGetRaw('index.enc');
-      if (raw) { const rem = (await vDecJson(raw)).items || {}; remoteSig = vSig(rem); V.index.items = vMerge(V.index.items, rem); }
+      if (raw) { const rem = await vDecJson(raw); remoteSig = vSig(rem); vMergeIndex(rem); }
     }
-    if (remoteSig !== null && remoteSig === vSig(V.index.items)) return; // niente di nuovo da scrivere
+    if (remoteSig !== null && remoteSig === vSig(V.index)) return; // niente di nuovo da scrivere
     const r = await vPut('index.enc', await vEncJson(V.index), sha, 'Indice aggiornato');
     if (r.ok) return;
     if (r.status === 401 || r.status === 403) throw new Error('Il token del vault non ha il permesso di scrivere (Contents: Read and write) (' + r.status + ')');
@@ -369,6 +371,43 @@ function vExpiry(x) {
 const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
 const vTitle = (x) => x.title || (x.kind === 'id' ? (x.idType || 'Documento d\'identità') : x.kind === 'cedolino' ? `Cedolino ${x.month ? MESI[x.month - 1] + ' ' : ''}${x.year || ''}` : x.kind === 'cud' ? `CU ${x.year || ''}` : x.kind === 'fiscale' ? `Documento fiscale ${x.year || ''}` : 'Documento');
 let vSeg = 'cedolino';
+/* categorie e tag di "Altro" (es. Visite mediche · cardiologia, analisi…) */
+const VCOLORS = ['#2F4BD8', '#C2410C', '#15803D', '#7C3AED', '#B91C1C', '#0E7490', '#A16207', '#BE185D'];
+const vByName = (a, b) => a.name.localeCompare(b.name, 'it');
+const vCats = () => Object.values(V.index.cats || {}).filter((c) => !c.deleted).sort(vByName);
+const vTags = () => Object.values(V.index.tags || {}).filter((t) => !t.deleted).sort(vByName);
+let vAltroCat = 'all', vAltroTag = null;
+async function vNewCat(label) {
+  const n = prompt(label || 'Nome della categoria (es. "Visite mediche")'); if (!n || !n.trim()) return null;
+  const ex = vCats().find((c) => c.name.toLowerCase() === n.trim().toLowerCase()); if (ex) return ex;
+  V.index.cats = V.index.cats || {};
+  const c = { id: uid('vc'), name: n.trim(), createdAt: now(), updatedAt: now() }; V.index.cats[c.id] = c;
+  await vSaveIndexLocal(); clearTimeout(V.timer); V.timer = setTimeout(vSync, 500); return c;
+}
+async function vNewTag() {
+  const n = prompt('Nuovo tag (es. "cardiologia", "analisi del sangue", "dentista")'); if (!n || !n.trim()) return null;
+  const ex = vTags().find((t) => t.name.toLowerCase() === n.trim().toLowerCase()); if (ex) return ex;
+  V.index.tags = V.index.tags || {};
+  const t = { id: uid('vt'), name: n.trim(), color: VCOLORS[Object.keys(V.index.tags).length % VCOLORS.length], createdAt: now(), updatedAt: now() }; V.index.tags[t.id] = t;
+  await vSaveIndexLocal(); clearTimeout(V.timer); V.timer = setTimeout(vSync, 500); return t;
+}
+function vCatSelect(cur, onPick) {
+  return h('div', { class: 'field' }, h('label', null, 'Categoria'),
+    h('select', { class: 'input', onchange: async (e) => {
+      if (e.target.value === '__new') { const c = await vNewCat(); onPick(c ? c.id : cur || null); }
+      else onPick(e.target.value || null);
+    } }, h('option', { value: '' }, 'Senza categoria'), vCats().map((c) => h('option', { value: c.id, selected: c.id === cur }, c.name)), h('option', { value: '__new' }, '+ Nuova categoria…')));
+}
+function vTagPicker(selected, onChange) {
+  const wrap = h('div', { class: 'toggles' });
+  const draw = () => wrap.replaceChildren(
+    ...vTags().map((t) => h('button', { type: 'button', class: 'toggle t-lbl', style: `--c:${t.color}`, 'aria-pressed': String(selected.includes(t.id)), onclick: () => {
+      selected = selected.includes(t.id) ? selected.filter((x) => x !== t.id) : [...selected, t.id]; onChange(selected); draw();
+    } }, h('span', { class: 'sw', style: `background:${t.color}` }), t.name)),
+    h('button', { type: 'button', class: 'toggle t-add', onclick: async () => { const t = await vNewTag(); if (t && !selected.includes(t.id)) { selected = [...selected, t.id]; onChange(selected); } draw(); } }, icon('plus'), 'Nuovo tag'));
+  draw(); return wrap;
+}
+const vTagNames = (x) => (x.tags || []).map((id) => (V.index.tags || {})[id]).filter((t) => t && !t.deleted).map((t) => t.name);
 const vBack = (t) => topBar(t, { back: 'vault', small: true, noSync: true });
 function vStatusPill() {
   const t = { ok: 'Cifrato e salvato', saving: V.upTotal ? `Carico ${V.upDone}/${V.upTotal}` : 'Salvo…', error: 'Errore', offline: 'Offline, in attesa', idle: 'Aperto' }[V.state] || 'Aperto';
@@ -379,18 +418,30 @@ function viewVault() {
   if (!vConfigured()) return viewVaultSetup();
   if (!vUnlocked()) return viewVaultLock();
   const all = vItems();
-  const arr = all.filter((x) => x.kind === vSeg).sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.month || 0) - (a.month || 0)) || (b.createdAt - a.createdAt));
+  const altro = vSeg === 'altro';
+  const cats = altro ? vCats() : [];
+  if (altro && vAltroCat !== 'all' && vAltroCat !== 'none' && !cats.some((c) => c.id === vAltroCat)) vAltroCat = 'all';
+  const inCat = (x) => !altro || vAltroCat === 'all' || (vAltroCat === 'none' ? !(x.catId && (V.index.cats || {})[x.catId] && !V.index.cats[x.catId].deleted) : x.catId === vAltroCat);
+  const base = all.filter((x) => x.kind === vSeg && inCat(x));
+  const usedTags = altro ? vTags().filter((t) => base.some((x) => (x.tags || []).includes(t.id))) : [];
+  if (vAltroTag && !usedTags.some((t) => t.id === vAltroTag)) vAltroTag = null;
+  const arr = base.filter((x) => !altro || !vAltroTag || (x.tags || []).includes(vAltroTag)).sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.month || 0) - (a.month || 0)) || (b.createdAt - a.createdAt));
   const years = vSeg === 'id' ? ['Documenti d\'identità'] : [...new Set(arr.map((x) => x.year || '—'))];
   const body = [
     V.state === 'error' ? h('div', { class: 'banner' }, h('div', null, h('b', null, 'Problema di sincronizzazione: '), V.error, ' ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); vSync(); } }, 'Riprova'))) : null,
     h('button', { class: 'btn block', style: 'margin-bottom:12px', onclick: () => go('vmulti') }, icon('upload'), 'Carica più documenti insieme'),
     segmented(VKINDS.map(([k, l]) => [k, l, all.filter((x) => x.kind === k).length]), vSeg, (k) => { vSeg = k; render(true); }),
+    altro ? h('div', { class: 'chips', style: 'margin-top:10px' },
+      [['all', 'Tutte'], ...cats.map((c) => [c.id, c.name]), ['none', 'Senza categoria']].map(([k, l]) => h('button', { class: 'chip', 'aria-pressed': String(vAltroCat === k), onclick: () => { vAltroCat = k; vAltroTag = null; render(true); } }, k === 'all' || k === 'none' ? null : icon('folder'), l)),
+      h('button', { class: 'chip', onclick: async () => { const c = await vNewCat(); if (c) { vAltroCat = c.id; render(true); } } }, icon('plus'), 'Categoria')) : null,
+    usedTags.length ? h('div', { class: 'toggles', style: 'margin-bottom:6px' }, usedTags.map((t) => h('button', { type: 'button', class: 'toggle t-lbl', style: `--c:${t.color}`, 'aria-pressed': String(vAltroTag === t.id), onclick: () => { vAltroTag = vAltroTag === t.id ? null : t.id; render(true); } },
+      h('span', { class: 'sw', style: `background:${t.color}` }), t.name))) : null,
     ...years.map((y) => [h('div', { class: 'group-title' }, String(y)),
       h('div', { class: 'list' }, arr.filter((x) => vSeg === 'id' || (x.year || '—') === y).map((x) => h('button', { class: 'card-link', onclick: () => go('vdoc/' + x.id) },
         h('span', { class: 'ic' }, icon(x.kind === 'cedolino' ? 'euro' : x.kind === 'fiscale' ? 'bank' : x.kind === 'id' ? 'key' : 'file')),
         h('span', { class: 't' }, h('b', null, vTitle(x)), x.kind === 'id' && vExpiry(x)
           ? h('span', null, h('span', { class: 'badge ' + vExpiry(x).cls }, vExpiry(x).label), ` · ${(x.pages || []).length} file`)
-          : h('span', null, `${(x.pages || []).length} file${x.notes ? ' · ' + x.notes.slice(0, 40) : ''}`)),
+          : h('span', null, `${(x.pages || []).length} file`, x.kind === 'altro' && vAltroCat === 'all' && x.catId && (V.index.cats || {})[x.catId] && !V.index.cats[x.catId].deleted ? ' · ' + V.index.cats[x.catId].name : '', vTagNames(x).length ? ' · ' + vTagNames(x).join(', ') : x.notes ? ' · ' + x.notes.slice(0, 40) : '')),
         h('span', { class: 'chev' }, icon('chev')))))]),
     arr.length ? null : h('div', { class: 'empty' }, 'Nessun documento qui. Aggiungilo con il +.'),
     h('div', { class: 'inline', style: 'margin-top:22px' },
@@ -473,7 +524,7 @@ function viewVaultSetup() {
 let vDraft = null;
 function viewVaultNew() {
   if (!vUnlocked()) return viewVaultLock();
-  if (!vDraft) { const d = new Date(); vDraft = { kind: vSeg, year: d.getFullYear(), month: d.getMonth() + 1, title: '', notes: '', pages: [] }; }
+  if (!vDraft) { const d = new Date(); vDraft = { kind: vSeg, year: d.getFullYear(), month: d.getMonth() + 1, title: '', notes: '', pages: [], catId: vSeg === 'altro' && vAltroCat !== 'all' && vAltroCat !== 'none' ? vAltroCat : null, tags: vSeg === 'altro' && vAltroTag ? [vAltroTag] : [] }; }
   const D = vDraft;
   const redraw = () => { const y = window.scrollY; render(true); window.scrollTo(0, y); };
   const add = async (fl) => { const ps = await filesToPages(fl); ps.forEach((p) => { p.url = URL.createObjectURL(p.blob); }); D.pages.push(...ps); redraw(); };
@@ -486,6 +537,7 @@ function viewVaultNew() {
       if (D.kind === 'id') { D.idType = D.idType || IDTYPES[0]; }
       const item = { id: uid('v'), kind: D.kind, idType: D.kind === 'id' ? D.idType : undefined, expiry: D.kind === 'id' ? (D.expiry || null) : undefined, year: Number(D.year) || null, month: D.kind === 'cedolino' ? Number(D.month) || null : null,
         title: D.title.trim(), notes: D.notes.trim(), pages, createdAt: now() };
+      if (D.kind === 'altro') { item.catId = D.catId || null; item.tags = D.tags || []; }
       await vSaveItem(item);
       vSeg = item.kind; vDraft = null;
       location.replace('#/vault');
@@ -508,10 +560,12 @@ function viewVaultNew() {
             h('select', { class: 'input', onchange: (e) => { D.year = e.target.value; } }, Array.from({ length: 25 }, (_, i) => yNow + 1 - i).map((y) => h('option', { value: y, selected: Number(D.year) === y }, y)))),
           D.kind === 'cedolino' ? h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Mese'),
             h('select', { class: 'input', onchange: (e) => { D.month = e.target.value; } }, MESI.map((m, i) => h('option', { value: i + 1, selected: Number(D.month) === i + 1 }, m)), h('option', { value: 13, selected: Number(D.month) === 13 }, '13ª / 14ª'))) : null),
+        D.kind === 'altro' ? [vCatSelect(D.catId, (id) => { D.catId = id; redraw(); }),
+          h('div', { class: 'field' }, h('label', null, 'Tag'), vTagPicker(D.tags || [], (v) => { D.tags = v; }))] : null,
         h('div', { class: 'field' }, h('label', null, 'Titolo (facoltativo)'),
           h('input', { class: 'input', value: D.title, placeholder: vTitle(Object.assign({}, D, { title: '' })), oninput: (e) => { D.title = e.target.value; } })),
         h('div', { class: 'field' }, h('label', null, 'Note'),
-          h('textarea', { class: 'input', value: D.notes, placeholder: 'Datore di lavoro, note…', oninput: (e) => { D.notes = e.target.value; } }))),
+          h('textarea', { class: 'input', value: D.notes, placeholder: D.kind === 'altro' ? 'Medico, struttura, esito…' : 'Datore di lavoro, note…', oninput: (e) => { D.notes = e.target.value; } }))),
       h('div', { class: 'panel' }, h('h2', null, 'File', h('span', { class: 'prog' }, D.pages.length || '')),
         D.pages.length ? h('div', { class: 'pages' }, D.pages.map((p, i) => h('div', { class: 'page' },
           p.type === 'pdf' ? h('div', { class: 'pdf-thumb' }, icon('file'), h('span', null, p.name || 'PDF')) : h('img', { src: p.url, alt: '' }),
@@ -572,6 +626,9 @@ function viewVaultDoc(route) {
         h('div', { class: 'field', style: 'flex:1' }, h('label', null, 'Scadenza'),
           h('input', { class: 'input', type: 'date', value: x.expiry || '', onchange: async (e) => { x.expiry = e.target.value || null; await vSaveItem(x); render(true); } }))),
         vExpiry(x) ? h('p', { class: 'small', style: 'margin:8px 0 0' }, h('span', { class: 'badge ' + vExpiry(x).cls }, vExpiry(x).label)) : null) : null,
+      x.kind === 'altro' ? h('div', { class: 'panel props' },
+        vCatSelect(x.catId, async (id) => { x.catId = id; await vSaveItem(x); render(true); }),
+        h('div', { class: 'field' }, h('label', null, 'Tag'), vTagPicker(x.tags || [], async (v) => { x.tags = v; await vSaveItem(x); }))) : null,
       vSecretsPanel(x),
       h('div', { class: 'panel' }, h('div', { class: 'field' }, h('label', null, 'Note'),
         h('textarea', { class: 'input', value: x.notes || '', onchange: async (e) => { x.notes = e.target.value; await vSaveItem(x); } }))),
@@ -594,7 +651,8 @@ function viewVaultSettings() {
       for (const x of vItems()) for (const [i, p] of (x.pages || []).entries()) {
         btn.textContent = `Decifro ${++n}…`;
         const kind = VKINDS.find(([k]) => k === x.kind)[1];
-        zip.file(`${safeName(kind)}/${x.year || 'senza anno'}/${safeName(vTitle(x))}${x.pages.length > 1 ? ' - p' + (i + 1) : ''}.${p.type === 'pdf' ? 'pdf' : 'jpg'}`, await vFileBlob(p));
+        const cat = x.kind === 'altro' && x.catId && (V.index.cats || {})[x.catId] && !V.index.cats[x.catId].deleted ? safeName(V.index.cats[x.catId].name) + '/' : '';
+        zip.file(`${safeName(kind)}/${cat}${x.year || 'senza anno'}/${safeName(vTitle(x))}${x.pages.length > 1 ? ' - p' + (i + 1) : ''}.${p.type === 'pdf' ? 'pdf' : 'jpg'}`, await vFileBlob(p));
       }
       const blob = await zip.generateAsync({ type: 'blob' });
       const a = h('a', { href: URL.createObjectURL(blob), download: `vault-${todayISO()}.zip` }); document.body.append(a); a.click(); a.remove();
@@ -652,6 +710,7 @@ function viewVaultSettings() {
         h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Vault Documenti casa', readonly: true, class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true' }),
         passField('v-old', 'Frase attuale', 'current-password'), passField('v-new', 'Nuova frase', 'new-password'), passField('v-new2', 'Ripeti nuova frase', 'new-password'),
         h('button', { class: 'btn', type: 'submit', style: 'margin-top:10px' }, 'Cambia frase')),
+      vCatTagPanel(),
       trash.length ? h('div', { class: 'panel' }, h('h2', null, `Cestino del vault (${trash.length})`),
         h('div', { class: 'list' }, trash.map((x) => h('div', { class: 'proj-row' }, h('span', { style: 'flex:1' }, vTitle(x)),
           h('button', { class: 'btn', onclick: async () => { x.deleted = false; await vSaveItem(x); render(true); toast('Ripristinato'); } }, 'Ripristina'))))) : null,
@@ -790,4 +849,25 @@ function vSecretsPanel(x) {
     h('p', { class: 'help', style: 'margin-top:0' }, 'Cifrati come il resto del vault. Non compaiono negli elenchi né nello ZIP; si vedono solo qui per 10 secondi toccando l\'occhio.'),
     list.map(row),
     h('button', { class: 'btn ghost', type: 'button', onclick: async () => { x.secrets = [...list, { label: x.kind === 'id' && !list.length ? 'PIN' : '', value: '' }]; await vSaveItem(x); render(true); } }, icon('plus'), 'Aggiungi codice'));
+}
+
+/* gestione categorie e tag di "Altro" (impostazioni vault) */
+function vCatTagPanel() {
+  const used = (pred) => vItems().filter(pred).length;
+  const row = (o, kindLabel, map, countPred, onDelete) => h('div', { class: 'proj-row' },
+    kindLabel === 'tag' ? h('span', { class: 'sw', style: `width:10px;height:10px;border-radius:5px;flex:none;background:${o.color}` }) : icon('folder'),
+    h('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis' }, o.name, h('span', { class: 'muted' }, ` · ${used(countPred)}`)),
+    h('button', { class: 'icon-btn plain', 'aria-label': 'Rinomina', onclick: async () => { const n = prompt('Nuovo nome', o.name); if (!n || !n.trim()) return; o.name = n.trim(); o.updatedAt = now(); await vSaveIndexLocal(); vSync(); render(true); } }, icon('pen')),
+    h('button', { class: 'icon-btn plain', 'aria-label': 'Elimina', onclick: async () => {
+      const n = used(countPred);
+      if (!confirm(n ? `${n} documenti la usano: restano nel vault, solo senza questa ${kindLabel}. Elimino?` : `Elimino la ${kindLabel} "${o.name}"?`)) return;
+      o.deleted = true; o.updatedAt = now(); await onDelete(); await vSaveIndexLocal(); vSync(); render(true);
+    } }, icon('trash')));
+  return h('div', { class: 'panel' }, h('h2', null, 'Categorie e tag di "Altro"'),
+    h('p', { class: 'help', style: 'margin:0 0 10px' }, 'Cifrati come i documenti: nomi di categorie e tag non sono mai leggibili su GitHub.'),
+    h('div', { class: 'list' }, vCats().map((c) => row(c, 'categoria', 'cats', (x) => x.catId === c.id, async () => { for (const x of vItems().filter((y) => y.catId === c.id)) { x.catId = null; x.updatedAt = now(); } }))),
+    h('div', { class: 'list', style: 'margin-top:8px' }, vTags().map((t) => row(t, 'tag', 'tags', (x) => (x.tags || []).includes(t.id), async () => { for (const x of vItems().filter((y) => (y.tags || []).includes(t.id))) { x.tags = x.tags.filter((k) => k !== t.id); x.updatedAt = now(); } }))),
+    h('div', { class: 'inline', style: 'margin-top:10px' },
+      h('button', { class: 'btn', onclick: async () => { if (await vNewCat()) render(true); } }, icon('plus'), 'Categoria'),
+      h('button', { class: 'btn', onclick: async () => { if (await vNewTag()) render(true); } }, icon('plus'), 'Tag')));
 }
