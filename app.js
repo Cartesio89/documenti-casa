@@ -445,9 +445,9 @@ const Sync = {
       headers: Object.assign({ Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, opts.headers || {}),
     }));
   },
-  async readJson(path) {
+  async readJson(path, fresh) {
     const c = this.cfg();
-    const r = await this.api(`contents/${encPath(path)}?ref=${encodeURIComponent(c.branch || 'main')}`);
+    const r = await this.api(`contents/${encPath(path)}?ref=${encodeURIComponent(c.branch || 'main')}${fresh ? '&_=' + now() : ''}`);
     if (r.status === 404) return { data: null, sha: null };
     if (r.status === 401 || r.status === 403) throw new Error('Token non valido o senza permessi (' + r.status + ')');
     if (!r.ok) throw new Error('Lettura fallita (' + r.status + ')');
@@ -493,8 +493,12 @@ const Sync = {
     try {
       await this.uploadPending();
       let ok = false;
-      for (let attempt = 0; attempt < 4 && !ok; attempt++) {
-        const remote = await this.readJson('data.json');
+      // Subito dopo un salvataggio GitHub a volte restituisce per qualche secondo la versione vecchia
+      // (sha superato) e il PUT va in conflitto: riprovo aspettando sempre di più (~40 s in tutto).
+      const waits = [0, 1500, 3000, 5000, 8000, 10000, 12000];
+      for (let attempt = 0; attempt < waits.length && !ok; attempt++) {
+        if (waits[attempt]) await new Promise((r) => setTimeout(r, waits[attempt]));
+        const remote = await this.readJson('data.json', true);
         const merged = remote.data ? mergeDB(DB, remote.data) : DB;
         DB = merged; ensureHome(); dupCache = null; lsSet(LS.data, DB);
         if (remote.data && !differs(merged, remote.data)) { lsSet(LS.sha, remote.sha); ok = true; break; }
@@ -502,7 +506,7 @@ const Sync = {
         if (res.conflict) continue;
         lsSet(LS.sha, res.sha); ok = true;
       }
-      if (!ok) throw new Error('Conflitto non risolto, riprovo più tardi');
+      if (!ok) { this.retryTimer = setTimeout(() => this.run(), 20000); throw new Error('GitHub lento a confermare il salvataggio: riprovo da solo tra 20 secondi (le modifiche restano sul telefono)'); }
       lsSet(LS.dirty, false);
       await this.checkInbox();
       this.last = now(); this.error = '';
