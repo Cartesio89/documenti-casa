@@ -702,8 +702,16 @@ const list = (arr, opts) => h('div', { class: 'list' }, arr.map((d) => docRow(d,
 const byDue = (a, b) => (a.dueDate || '9999') < (b.dueDate || '9999') ? -1 : (a.dueDate || '9999') > (b.dueDate || '9999') ? 1 : (b.createdAt - a.createdAt);
 const byDateDesc = (a, b) => ((b.docDate || '') + b.createdAt) > ((a.docDate || '') + a.createdAt) ? 1 : -1;
 const sum = (arr) => Math.round(arr.reduce((s, d) => s + (Number(d.amount) || 0), 0) * 100) / 100;
+function mailBanner() {
+  // lo script scrive inbox.json almeno ogni 12 ore: se tace da più di un giorno è fermo
+  if (!Sync.enabled() || !(DB.meta.mailSenders || []).some((s) => s.enabled !== false)) return null;
+  const last = INBOX.lastRun ? new Date(INBOX.lastRun).getTime() : 0;
+  if (!last || INBOX.error) return INBOX.error ? h('div', { class: 'banner' }, h('div', null, 'Lettore mail in errore: ' + INBOX.error + ' ', h('a', { href: '#/mail' }, 'Dettagli'))) : null;
+  if (Date.now() - last < 26 * 3600000) return null;
+  return h('div', { class: 'banner' }, h('div', null, `Lettore mail fermo dal ${new Date(last).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}: le bollette via mail non arrivano in automatico. `, h('a', { href: '#/mail' }, 'Cosa fare')));
+}
 function syncBanner() {
-  if (Sync.enabled()) return null;
+  if (Sync.enabled()) return mailBanner();
   return h('div', { class: 'banner' }, h('div', null, 'Sincronizzazione non attiva: dati e foto restano solo su questo dispositivo. ', h('a', { href: '#/impostazioni' }, 'Collegala')));
 }
 
@@ -1017,7 +1025,14 @@ function viewMail() {
   return {
     top: topBar('Mail automatica', { back: 'altro', small: true }),
     body: [h('div', { class: 'detail' },
-      h('div', { class: 'panel' }, h('h2', null, 'Stato'), h('p', { class: 'small', style: 'margin:0' }, health)),
+      h('div', { class: 'panel' }, h('h2', null, 'Stato'), h('p', { class: 'small', style: 'margin:0' }, health),
+        INBOX.lastRun && Date.now() - new Date(INBOX.lastRun).getTime() > 26 * 3600000 ? h('div', { class: 'small', style: 'margin-top:10px' },
+          h('b', null, 'Lo script è fermo (dovrebbe aggiornare almeno ogni 12 ore). Controlla con l\'account ' + (DB.meta.mailbox || 'della casella') + ':'),
+          h('ol', { style: 'margin:6px 0 0 18px;padding:0' },
+            h('li', null, 'script.google.com → progetto del lettore mail → Attivatori (icona orologio): deve esserci "run" ogni 15 minuti. Se manca, nell\'editor scegli la funzione setup e premi Esegui.'),
+            h('li', null, 'Esecuzioni (icona elenco): se ci sono errori, leggi il messaggio.'),
+            h('li', null, 'GitHub → Settings → Developer settings → Fine-grained tokens: il token usato dallo script non deve essere scaduto e deve avere accesso a documenti-casa-data (Contents: read and write). Se lo rigeneri, aggiorna GH_TOKEN nelle Proprietà script.'),
+            h('li', null, 'Poi nell\'editor esegui run una volta: entro un minuto qui compare il nuovo orario.'))) : null),
       h('div', { class: 'panel' },
         h('h2', null, 'Casella controllata'),
         h('input', { class: 'input', type: 'email', value: DB.meta.mailbox || '', onchange: (e) => updateMeta({ mailbox: e.target.value.trim() }) }),
