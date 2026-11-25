@@ -547,10 +547,15 @@ function senderFor(entry) {
     || ss.find((s) => s.match && ((entry.from || '') + ' ' + (entry.subject || '')).toLowerCase().includes(s.match.toLowerCase()))
     || { label: (entry.from || 'Mail').replace(/<.*>/, '').trim(), category: 'altro', sub: '', status: 'da_pagare' };
 }
+// mail del fornitore che non sono bollette (privacy, newsletter, offerte…): segnate come lette, nessun documento
+const MAIL_NOT_BILL = /privacy|informativa|newsletter|offert|promozion|sconto|sondaggio|questionario|webinar|condizioni (generali|contrattuali)|aggiornamento (dei|delle) (termini|condizioni)|benvenut|programma fedelt|premi\b/i;
 function importInbox(entries) {
   let changed = 0;
   for (const e of entries) {
     if (!e || !e.id || DB.mail[e.id]) continue;
+    if (MAIL_NOT_BILL.test(e.subject || '') && !/bollett|fattur|sollecit|scaden/i.test(e.subject || '')) {
+      DB.mail[e.id] = { id: e.id, docId: null, skipped: true, updatedAt: now() }; changed++; continue;
+    }
     const s = senderFor(e);
     const docId = 'mail_' + e.id;
     if (!DB.docs[docId]) {

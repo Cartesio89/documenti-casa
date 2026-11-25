@@ -15,6 +15,7 @@
 
 var LABEL = 'documenti-casa';
 var MAX_ENTRIES_DAYS = 180;
+var NOT_BILL = /privacy|informativa|newsletter|offert|promozion|sconto|sondaggio|questionario|webinar|condizioni (generali|contrattuali)|aggiornamento (dei|delle) (termini|condizioni)|benvenut|programma fedelt|premi\b/i;
 var RELEVANT = /bollett|fattur|pagament|importo|scaden|addebit|\brata\b|verbale|sollecito|avviso di pagamento|estratto conto/i;
 
 function setup() {
@@ -112,6 +113,7 @@ function run() {
           if (!sender) return;
           var body = msg.getPlainBody() || '';
           if (!RELEVANT.test(subject + ' ' + body.slice(0, 3000))) return; // newsletter, offerte: ignorate
+          if (NOT_BILL.test(subject) && !/bollett|fattur|sollecit|scaden/i.test(subject)) return; // privacy, offerte…
           var parsed = DocParse.parseDocText(subject + '\n' + body);
           var subjectDates = DocParse.findDates(subject);
           var entry = {
